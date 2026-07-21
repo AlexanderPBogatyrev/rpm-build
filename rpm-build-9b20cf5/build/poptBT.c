@@ -26,6 +26,7 @@ struct rpmBuildArguments_s         rpmBTArgs;
 #define	POPT_NODEPS		-1011
 #define	POPT_SIGN		-1012
 #define	POPT_FORCE		-1013
+#define	POPT_MAKECLEANSKIPLIST	-1014
 
 #define	POPT_REBUILD		0x4220
 #define	POPT_RECOMPILE		0x4320
@@ -126,6 +127,10 @@ static void buildArgCallback( /*@unused@*/ poptContext con,
     case POPT_RMSOURCE: rba->buildAmount |= RPMBUILD_RMSOURCE; break;
     case POPT_RMSPEC: rba->buildAmount |= RPMBUILD_RMSPEC; break;
     case POPT_RMBUILD: rba->buildAmount |= RPMBUILD_RMBUILD; break;
+    case POPT_MAKECLEANSKIPLIST:
+	rba->makeCleanSkipList = 1;
+	rba->buildAmount |= RPMBUILD_MAKECLEANSKIPLIST;
+	break;
     case POPT_BUILDROOT:
 	if (rba->buildRootOverride) {
 	    rpmError(RPMERR_BUILDROOT, _("buildroot already specified, ignoring %s\n"), arg);
@@ -233,6 +238,8 @@ struct poptOption rpmBuildPoptTable[] = {
 	N_("override build root"), "DIRECTORY" },
  { "clean", '\0', 0, 0, POPT_RMBUILD,
 	N_("remove build tree when done"), NULL},
+ { "makecleanskiplist", '\0', 0, 0, POPT_MAKECLEANSKIPLIST,
+	N_("run packaged makecleanskiplist helper script during build"), NULL},
  { "force", '\0', POPT_ARGFLAG_DOC_HIDDEN, &force, POPT_FORCE,
         N_("ignore ExcludeArch: directives from spec file"), NULL},
  { "fsmdebug", '\0', (POPT_ARG_VAL|POPT_ARGFLAG_DOC_HIDDEN), &_fsm_debug, -1,

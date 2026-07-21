@@ -1,0 +1,133 @@
+#!/bin/bash
+# shellcheck disable=SC2120
+
+# Tests for --makecleanskiplist helper integration.
+
+cd "$(dirname "$0")" || exit 1
+source ./test-functions.sh
+
+HELPER_PATH=
+HELPER_BACKUP=
+HELPER_INSTALLED=
+
+helper_setup() {
+	local rpmb_bin helper src
+
+	rpmb_bin=$(echo "$RPMB" | awk '{print $NF}')
+	helper=$(strings "$rpmb_bin" 2>/dev/null | grep -E '/makecleanskiplist$' | head -1)
+	if [ -z "$helper" ]; then
+		printf 'Bail out! cannot resolve makecleanskiplist path from %s\n' "$rpmb_bin" >&2
+		exit 1
+	fi
+
+	src="../scripts/makecleanskiplist"
+	if [ ! -f "$src" ]; then
+		printf 'Bail out! helper script not found: %s\n' "$src" >&2
+		exit 1
+	fi
+
+	if [ -e "$helper" ]; then
+		HELPER_BACKUP="$t/makecleanskiplist.bak"
+		cp -a -- "$helper" "$HELPER_BACKUP"
+	fi
+
+	mkdir -p "$(dirname "$helper")"
+	install -m755 -- "$src" "$helper"
+	HELPER_PATH=$helper
+	HELPER_INSTALLED=1
+}
+
+helper_restore() {
+	if [ "$HELPER_INSTALLED" != 1 ] || [ -z "$HELPER_PATH" ]; then
+		return 0
+	fi
+	if [ -n "$HELPER_BACKUP" ]; then
+		install -m755 -- "$HELPER_BACKUP" "$HELPER_PATH"
+	else
+		rm -f -- "$HELPER_PATH"
+	fi
+}
+
+helper_setup
+trap 'helper_restore; atexit' EXIT
+
+write_spec() {
+	cat <<-EOF >"$t/test.spec"
+		Name: test-makecleanskiplist
+		Version: 0
+		Release: 0
+		Summary: Test %name
+		Group: Other
+		License: CC0
+		BuildArch: noarch
+		AutoReqProv: no
+		%description
+		Test helper invocation.
+		%prep
+		echo prep >> Stages
+		%build
+		echo build >> Stages
+		%files
+	EOF
+}
+
+cb_order_bp() {
+	re_output="$t/order"
+	grep -E '^Executing\(--makecleanskiplist\)|^Executing\(%prep\)|^Executing\(%build\)' \
+		< "$t/output" \
+		| sed 's/):.*$//' > "$re_output"
+}
+
+cb_no_helper() {
+	re_output="$t/output"
+}
+
+topic="makecleanskiplist"
+write_spec
+
+run \
+	spec="$t/test.spec" \
+	args="-bp --nodeps --makecleanskiplist" \
+	callback=cb_order_bp \
+	msg='helper runs before %prep on -bp' \
+	re=$'Executing\\(--makecleanskiplist\\)\nExecuting\\(%prep\\)' \
+	vre='Executing\\(%build\\)'
+
+run \
+	spec="$t/test.spec" \
+	args="-bp --nodeps --makecleanskiplist" \
+	msg='helper prints diagnostics to build log' \
+	re='=== makecleanskiplist ===\nscript path: .*\n=== environment ==='
+
+run \
+	spec="$t/test.spec" \
+	args="-bc --nodeps --makecleanskiplist" \
+	callback=cb_order_bp \
+	msg='helper runs before %prep on -bc' \
+	re=$'Executing\\(--makecleanskiplist\\)\nExecuting\\(%prep\\)'
+
+run \
+	spec="$t/test.spec" \
+	args="-bp --nodeps" \
+	callback=cb_no_helper \
+	msg='helper is not run without flag' \
+	vre='Executing\\(--makecleanskiplist\\)|=== makecleanskiplist ==='
+
+run \
+	spec="$t/test.spec" \
+	args="-bp --nodeps --nobuild --makecleanskiplist" \
+	callback=cb_no_helper \
+	msg='helper is not run with --nobuild' \
+	vre='Executing\\(--makecleanskiplist\\)|=== makecleanskiplist ==='
+
+if [ -n "$HELPER_PATH" ] && [ -e "$HELPER_PATH" ]; then
+	MISSING_HELPER="$t/missing-helper"
+	mv -- "$HELPER_PATH" "$MISSING_HELPER"
+	run \
+		spec="$t/test.spec" \
+		args="-bp --nodeps --makecleanskiplist" \
+		expect=1 \
+		msg='missing helper script fails build' \
+		re='Bad exit status|Exec of .* failed|Executing\\(--makecleanskiplist\\)'
+	install -m755 -- "$MISSING_HELPER" "$HELPER_PATH"
+fi

@@ -15,6 +15,7 @@ EXTRA_DIST = \
 	brp-verify-unit \
 	compress_files \
 	find-lang \
+	makecleanskiplist \
 	rpmb-find-package \
 	fixup-binconfig fixup-pkgconfig fixup-libtool fixup-libraries \
 	fixup-desktop fixup-desktop.awk \
@@ -38,6 +39,7 @@ config_SCRIPTS = \
 	brp-alt \
 	compress_files \
 	find-lang \
+	makecleanskiplist \
 	rpmb-find-package \
 	fixup-binconfig fixup-pkgconfig fixup-libtool fixup-libraries \
 	fixup-gnuconfig fixup-desktop fixup-desktop.awk \

@@ -37,6 +37,7 @@ typedef enum rpmBuildFlags_e {
     RPMBUILD_RMSPEC	= (1 << 11),	/*!< Remove spec file. */
     RPMBUILD_PREPROCESS	= (1 << 12),	/*!< Preprocess spec file only. */
     RPMBUILD_MACROREQS	= (1 << 13),	/*!< Dump used macro names only. */
+    RPMBUILD_MAKECLEANSKIPLIST = (1 << 14), /*!< Run %%makecleanskiplist helper. */
     RPMBUILD_CONF	= (1 << 22),	/*!< Execute %%conf. */
 } rpmBuildFlags;
 /*@=typeuse@*/

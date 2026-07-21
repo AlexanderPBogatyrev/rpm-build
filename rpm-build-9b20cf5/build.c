@@ -60,7 +60,7 @@ static int checkSpec(Header h)
 }
 
 /*
- * Kurwa, durni ameryka?ce sobe zawsze my?l?, ?e ca?y ?wiat mówi po
+ * Kurwa, durni ameryka?ce sobe zawsze my?l?, ?e ca?y ?wiat mï¿½wi po
  * angielsku...
  */
 /* XXX this is still a dumb test but at least it's i18n aware */
@@ -298,6 +298,10 @@ static int buildForTarget(const char * arg, BTA_t ba,
 
     if (ba->buildAmount & RPMBUILD_PREPROCESS) /* we're done */
 	goto exit;
+
+    /* Preserve --makecleanskiplist across rebuild's buildAmount rewrite. */
+    if (ba->makeCleanSkipList)
+	buildAmount |= RPMBUILD_MAKECLEANSKIPLIST;
 
     /* Assemble source header from parsed components */
     initSourceHeader(spec);

@@ -18,6 +18,7 @@ noinst_HEADERS = \
 check_SCRIPTS = test_conditionals test_dnl test_shrink test_macros test_description \
 		test_caps test_removepostfixes \
 		test_specstep \
+		test_makecleanskiplist \
 		test_sysusers \
 		#
 TESTS = $(check_SCRIPTS)

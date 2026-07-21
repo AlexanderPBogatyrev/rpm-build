@@ -326,6 +326,22 @@ int buildSpec(Spec spec, int what, int test)
 	    }
 	}
     } else {
+	/* Optional packaged helper: prints its path and environment. */
+	if ((what & RPMBUILD_MAKECLEANSKIPLIST) && !test) {
+	    const char * savedSubdir = spec->buildSubdir;
+	    StringBuf sb = newStringBuf();
+
+	    appendStringBuf(sb, RPMCONFIGDIR "/makecleanskiplist\n");
+	    /* Avoid "cd <buildSubdir>" before %prep may create it. */
+	    spec->buildSubdir = NULL;
+	    rc = doScript(spec, RPMBUILD_STRINGBUF, "--makecleanskiplist",
+			sb, test);
+	    spec->buildSubdir = savedSubdir;
+	    sb = freeStringBuf(sb);
+	    if (rc)
+		goto exit;
+	}
+
 	if ((what & RPMBUILD_PREP) &&
 	    (rc = doScript(spec, RPMBUILD_PREP, NULL, NULL, test)))
 		goto exit;

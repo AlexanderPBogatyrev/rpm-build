@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# makecleanskiplist - proof-of-concept helper launched by rpmbuild
+# when --makecleanskiplist is given.
+#
+# Prints the absolute invocation path and the full process environment
+# into the build log (stdout/stderr of the build scriptlet).
+#
+
+script_path=$0
+if command -v readlink >/dev/null 2>&1; then
+	resolved=$(readlink -f -- "$0" 2>/dev/null) || resolved=
+	[ -n "$resolved" ] && script_path=$resolved
+elif command -v realpath >/dev/null 2>&1; then
+	resolved=$(realpath -- "$0" 2>/dev/null) || resolved=
+	[ -n "$resolved" ] && script_path=$resolved
+fi
+
+echo "=== makecleanskiplist ==="
+echo "script path: $script_path"
+echo "=== environment ==="
+env | LC_ALL=C sort
+echo "=== end makecleanskiplist ==="

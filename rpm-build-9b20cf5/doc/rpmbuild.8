@@ -23,7 +23,7 @@ rpmbuild \- Build RPM Package(s)
 .SS "RPMBUILD OPTIONS:"
 .PP
 
- [\fB--buildroot \fIDIRECTORY\fB\fR] [\fB--clean\fR] [\fB--nobuild\fR]
+ [\fB--buildroot \fIDIRECTORY\fB\fR] [\fB--clean\fR] [\fB--makecleanskiplist\fR] [\fB--nobuild\fR]
  [\fB--rmsource\fR] [\fB--rmspec\fR] [\fB--short-circuit\fR] [\fB--sign\fR]
  [\fB--nosource\fR] [\fB--nopatch\fR]
  [\fB--target \fIPLATFORM\fB\fR]
@@ -154,6 +154,11 @@ When building a package, override the BuildRoot tag with directory
 .TP
 \fB--clean\fR
 Remove the build tree after the packages are made.
+.TP
+\fB--makecleanskiplist\fR
+Run the packaged \fI/usr/lib/rpm/makecleanskiplist\fR helper
+script early in the build; the script logs its absolute path and
+the full environment to the build log.
 .TP
 \fB--nobuild\fR
 Do not execute any build stages. Useful for testing out spec files.
