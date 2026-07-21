@@ -1,0 +1,16 @@
+#!/bin/sh -efu
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+
+RpmlibReq()
+{
+	local f="$1"; shift
+	case "$f" in
+		*.filetrigger)
+			echo 'rpmlib(PosttransFiletriggers)'
+			;;
+	esac
+}
+
+ArgvFileAction RpmlibReq "$@"

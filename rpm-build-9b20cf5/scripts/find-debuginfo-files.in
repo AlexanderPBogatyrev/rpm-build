@@ -1,0 +1,123 @@
+#!/bin/sh -efu
+#
+# find-debuginfo-files - make %files list for debuginfo package
+#
+# Written by Alexey Tourbin <at@altlinux.org>.
+# License: GPLv2+.
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+ValidateBuildRoot
+
+cd "$RPM_BUILD_ROOT"
+
+rm -rf .tmp
+mkdir .tmp
+
+>.tmp/files
+>.tmp/files-can
+>.tmp/links
+>.tmp/links-in
+>.tmp/src
+
+while read -r f; do
+	f=${f#$RPM_BUILD_ROOT}
+
+	[ -n "$f" ] || continue
+
+	if [ -z "${f##/boot/vmlinuz-*}" ]; then
+		# Redirect to vmlinux saved by debuginfo.brp into debug tree's
+		# %modules_dir.
+		kver=${f#/boot/vmlinuz-}
+		f=/usr/lib/debug/lib/modules/$kver/vmlinux
+		if [ -e ".$f" ]; then
+			printf '%s\n' "$f" >> .tmp/files
+		else
+			Warning "Expected $f not found."
+		fi
+	fi
+	case "$f" in
+		/lib/modules/*.ko.[gx]z | /lib/modules/*.ko.zst)
+		f=${f%.*}
+		# Intentionally non-existent "uncompressed" file.
+		;;
+	esac
+
+	if [ -f .debuginfo/src/"$f" ]; then
+		LC_ALL=C sort -m -u -o .tmp/src .tmp/src .debuginfo/src/"$f"
+	fi
+
+	debugf=./usr/lib/debug$f.debug
+	if [ ! -f "$debugf" ]; then
+		if [ -z "${f##*/vmlinux}" ] && [ -e ".$f" ]; then
+			# No separate .debug file.
+			debugf=.$f
+		else
+			continue
+		fi
+	fi
+	if [ -L "$debugf" ]; then
+		# Save symlink for later filtering.
+		printf '%s\n' "$debugf" >> .tmp/links-in
+		continue
+	fi
+	printf '%s\n' "${debugf#.}" >> .tmp/files
+
+	# Save canonical file name for later symlinks filtering.
+	readlink -ve "$debugf" >> .tmp/files-can
+
+	id=$(debugedit -n -i "$debugf")
+	[ -n "$id" ] || continue
+
+	link=./usr/lib/debug/.build-id/${id:0:2}/${id:2}
+	if [ ! -L "$link" ]; then
+		mkdir -p "${link%/*}"
+		ln -snf "$(relative "$f" "${link#.}")" "$link"
+		[ "$debugf" = ".$f" ] ||
+			ln -snf "$(relative "${debugf#.}" "${link#.}".debug)" "$link".debug
+	fi
+	to=$(readlink -vm "$link")
+	if [ "$to" = "$RPM_BUILD_ROOT$f" ]; then
+		printf '%s\n' "${link#.}" >> .tmp/links
+		[ "$debugf" = ".$f" ] ||
+			printf '%s\n' "${link#.}".debug >> .tmp/links
+	fi
+done
+
+# Filter out symlinks pointing out of the package.
+sort -u .tmp/links-in |
+while read -r link; do
+	to=$(readlink -vm "$link")
+	if grep -Fqsxe "$to" .tmp/files-can; then
+		printf '%s\n' "${link#.}" >> .tmp/links
+	fi
+done
+
+sed 's|\(.*\)/.*|\1|' .tmp/files .tmp/links .tmp/src |sort -u |
+while read -r dir; do
+	while [ -n "$dir" ]; do
+		case $dir in
+			/usr/lib/debug/usr/*/*)
+				printf '%s\n' "$dir" ;;
+			/usr/lib/debug/usr/*)
+				break ;;
+			/usr/lib/debug/*/*)
+				printf '%s\n' "$dir" ;;
+			/usr/lib/debug/*)
+				break ;;
+			/usr/src/debug/*)
+				printf '%s\n' "$dir" ;;
+			*)
+				break ;;
+		esac
+		dir=${dir%/*}
+	done
+done |
+sort -u |
+sed 's/.*/"&"/' |
+sed 's/^/%dir /'
+
+# Filter out directories from debugedit src list file.
+grep -v '/$' < .tmp/src > .tmp/src-files ||:
+
+sort .tmp/files .tmp/links .tmp/src-files |
+sed 's/.*/"&"/'

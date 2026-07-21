@@ -1,0 +1,56 @@
+#!/bin/sh -efu
+#
+# Copyright (C) 2001, 2003, 2005, 2006, 2008  Dmitry V. Levin <ldv@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+#
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+[ $# -eq 1 ] && [ -n "$1" -a -z "${1##/*}" ] ||
+	{ ArgvFileAction "$0" "$@"; exit; }
+
+file="$1"
+
+head -1 "$file" |grep -qs '^#%PAM' || exit 0
+
+if [ -n "${PAM_SO_SUFFIX-}" ] && [ -z "${PAM_SO_SUFFIX##%*}" ]; then
+	Fatal "invalid PAM_SO_SUFFIX: build system provides no valid libpam-devel package"
+fi
+
+if [ -n "${PAM_NAME_SUFFIX-}" ] && [ -z "${PAM_NAME_SUFFIX##%*}" ]; then
+	Fatal "invalid PAM_NAME_SUFFIX: build system provides no valid libpam-devel package"
+fi
+
+# hack for "buildreq -bi".
+[ -f "${RPM_LIBDIR-}/libpam.so" ] ||:
+
+# pam_module.so
+sed -n 's#^[[:space:]]*\(account\|auth\|password\|session\)[[:space:]]\+\(requisite\|required\|sufficient\|optional\|\[[^]]\+\]\)[[:space:]]\+\(\(/usr\)\?/lib[0-9]*/security/\)\?\([^.[:space:]]\+\.so\)\($\|[[:space:]].*\)#PAM(\5'${PAM_SO_SUFFIX-}')#pg' <"$file" |sort -u
+
+# pam_module.so*
+sed -n 's#^[[:space:]]*\(account\|auth\|password\|session\)[[:space:]]\+\(requisite\|required\|sufficient\|optional\|\[[^]]\+\]\)[[:space:]]\+\(\(/usr\)\?/lib[0-9]*/security/\)\?\([^.[:space:]]\+\.so[^[:space:]]\+\).*#PAM(\5)#pg' <"$file" |sort -u
+
+# libpam(optional_module)
+sed -n 's/^[[:space:]]*-.*/libpam(optional_module)/p' <"$file" |sort -u
+
+# libpam(include), libpam(substack)
+sed -n 's#^[[:space:]]*\(account\|auth\|password\|session\)[[:space:]]\+\(include\|substack\)[[:space:]].*#libpam(\2)#pg' <"$file" |sort -u
+
+# pam(config) via include or substack
+sed -n 's#^[[:space:]]*\(account\|auth\|password\|session\)[[:space:]]\+\(include\|substack\)[[:space:]]\+\(/etc/pam\.d/\)\?\([^[:space:]]\+\).*#pam'${PAM_NAME_SUFFIX-}'(\4)#pg' <"$file" |sort -u
+
+# pam(config) via pam_stack
+sed -n 's#^[[:space:]]*\(account\|auth\|password\|session\)[[:space:]]\+\(requisite\|required\|sufficient\|optional\|\[[^]]\+\]\)[[:space:]]\+\(\(/usr\)\?/lib[0-9]*/security/\)\?pam_stack\.so[[:space:]]\+service=\([^[:space:]]\+\).*#pam(\5)#pg' <"$file" |sort -u

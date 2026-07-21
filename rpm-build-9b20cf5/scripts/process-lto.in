@@ -1,0 +1,41 @@
+#!/bin/sh -efu
+#
+# Process single file for LTO business.
+# (Will be run multiple instances in parallel.)
+#
+# Based on brp-strip-lto (Fedora).
+# Copyright (c) 2021 Vitaly Chikunov <vt@altlinux.org>.
+# License: GPLv2+.
+#
+# Implementation notes:
+# - eu-strip cannot be used due to absence of `-N`.
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+ValidateBuildRoot
+
+cd "$RPM_BUILD_ROOT"
+mkdir -p .tmp
+
+# If there is only slim lto, strip will produce "plugin needed to handle lto
+# object" warning, because of stripping __gnu_lto_v1 symbol while remaining
+# __gnu_lto_slim.
+strip -p -R '.gnu.lto_*' -R '.gnu.debuglto_*' -N '__gnu_lto_v1' -- "$@" ||
+	Fatal 'strip failed'
+
+# Verify that we still have exportable symbols.
+for f; do
+	# Output in one line per symbol format.
+	nm -g -A -P "$f" > .tmp/lto-nm.$$ 2>/dev/null
+	if grep -F -q -w ': __gnu_lto_slim' .tmp/lto-nm.$$; then
+		echo >> .tmp/lto-suggest
+		if grep -F -q -v -w ': __gnu_lto_slim' .tmp/lto-nm.$$; then
+			Fatal "$f: contains __gnu_lto_slim."
+		else
+			Fatal "$f: contains __gnu_lto_slim only."
+		fi
+	elif [ ! -s .tmp/lto-nm.$$ ]; then
+		# This is only informational call of file.
+		Warning "$f: contains no exportable symbols: $(file4 -b "$f")"
+	fi
+	rm .tmp/lto-nm.$$
+done

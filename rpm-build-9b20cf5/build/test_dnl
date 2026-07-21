@@ -1,0 +1,29 @@
+#!/bin/bash
+# shellcheck disable=SC2120
+
+cd "$(dirname "$0")" || exit 1
+source ./test-functions.sh
+
+topic="%dnl"
+pass vre='Macro %dnl not found' <<-EOF
+	%dnl
+EOF
+xfail <<-EOF
+	# %{expand:%global true 1}
+	exit %{?true}
+EOF
+pass <<-EOF
+	%dnl %{expand:%global true 1}
+	exit %{?true}
+EOF
+pass <<-EOF
+	echo a %dnl comment1
+	     b %dnl Next line goes into the echo
+	exit 1
+EOF
+pass <<-EOF
+	exit %{expand: %dnl comment1
+	               %dnl comment2
+	     0}
+	exit 1
+EOF

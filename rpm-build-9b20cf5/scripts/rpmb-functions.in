@@ -1,0 +1,160 @@
+#!/bin/sh -e
+#
+# Copyright (C) 2003  Dmitry V. Levin <ldv@altlinux.org>
+# Copyright (C) 2007  Alexey Tourbin <at@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+#
+
+if [ -z "${__included_rpmb-}" ]; then
+__included_rpmb=1
+
+unset CDPATH ||:
+export LC_ALL=C
+PROG="${0##*/}"
+
+case "${RPM_SCRIPTS_DEBUG:-0}" in
+	0) unset RPM_SCRIPTS_DEBUG ||: ;;
+	1|2) ;;
+	*) RPM_SCRIPTS_DEBUG=3; set -x ;;
+esac
+
+Fatal()
+{
+	echo "${0##*/}: ERROR: $*" >&2
+	exit 1
+}
+
+Warning()
+{
+	echo "${0##*/}: WARNING: $*" >&2
+}
+
+Info()
+{
+	echo "${0##*/}: $*" >&2
+}
+
+Verbose()
+{
+	[ "${RPM_SCRIPTS_DEBUG:-0}" -ge 1 ] || return 0
+	Info "$@"
+}
+
+Debug()
+{
+	[ "${RPM_SCRIPTS_DEBUG:-0}" -ge 2 ] || return 0
+	Info "$@"
+}
+
+ValidateBuildRoot()
+{
+	[ -n "${RPM_BUILD_ROOT-}" ] ||
+		Fatal 'RPM_BUILD_ROOT not set'
+	[ -n "$(printf %s "$RPM_BUILD_ROOT" |tr -d ' /.')" ] ||
+		Fatal "bogus RPM_BUILD_ROOT=$RPM_BUILD_ROOT"
+	local real_buildroot
+	# There could be simply no %install section...
+	# I pretend that non-existent buildroot is just canonical enough.
+	real_buildroot=$(readlink -vm -- "$RPM_BUILD_ROOT")
+	[ "$RPM_BUILD_ROOT" = "$real_buildroot" ] ||
+		Fatal "non-canonical RPM_BUILD_ROOT=$RPM_BUILD_ROOT real_buildroot=$real_buildroot"
+}
+
+[ -z "${RPM_BUILD_ROOT-}" ] || ValidateBuildRoot
+readonly RPM_BUILD_ROOT
+
+# Canonicalize each path component with respect to symbolic links, except
+# for the last; e.g. /etc/init.d/functions -> /etc/rc.d/init.d/functions.
+# While looking for links as we traverse path components, make sure to ignore
+# the following path prefixes:
+# * /bin;
+# * /sbin;
+# in other words, pretend those are never symlinks.
+#
+# To implement this, we cannot rely on existing core utilities and library
+# functions, since we deviate from readlink/realpath behaviour for each path
+# component.
+CanonPath() {
+	local f0="${1:?}"; shift
+	local ign_list='/bin:/sbin'
+	"${RPMB_TOOLS_DIR-@RPMCONFIGDIR@}"/remappath2 "$ign_list" "$f0"
+}
+
+PackagedFiles()
+{
+	if [ -n "${RPM_BUILD_ROOT-}" ]; then
+		[ -z "${RPM_SUBPACKAGE_NAME-}" ] ||
+		cat "$RPM_BUILD_ROOT/.files:$RPM_SUBPACKAGE_NAME" 2>/dev/null ||:
+	else
+		rpmquery --list -f -- "$@" 2>/dev/null ||:
+	fi
+}
+
+ArgvFileAction()
+{
+	local av_action="$1"; shift
+
+	if [ $# -gt 0 ]; then
+		local av_argv
+		av_argv=$(getopt -n "$PROG" -o v -l help,verbose -- "$@")
+		eval set -- "$av_argv"
+		while :; do
+			case "$1" in
+				--help) type Usage >/dev/null 2>&1 && Usage 0 ||
+					echo "Usage: $PROG [-v|--verbose] [FILE...]"
+					exit 0 ;;
+				-v|--verbose)
+					export RPM_SCRIPTS_DEBUG=$((${RPM_SCRIPTS_DEBUG:-0}+1))
+					shift ;;
+				--)	shift
+					break ;;
+				*) Fatal "unrecognized option: $1"
+			esac
+		done
+		[ "${RPM_SCRIPTS_DEBUG:-0}" -lt 3 ] || set -x
+	fi
+
+	local av_f
+	if [ $# -gt 0 ]; then
+		for av_f; do
+			[ -n "$av_f" -a -z "${av_f##/*}" ] || av_f=$(CanonPath "$av_f")
+			Debug "processing $av_f"
+			"$av_action" "$av_f" </dev/null
+		done
+	else
+		[ -t 0 ] && Info "reading file list from standard input"
+		while IFS= read -r av_f; do
+			[ -n "$av_f" -a -z "${av_f##/*}" ] || av_f=$(CanonPath "$av_f")
+			Debug "processing $av_f"
+			"$av_action" "$av_f" </dev/null
+		done
+	fi
+}
+
+# Quote given arguments for sed basic regular expression.
+# Usage example: sed "s/$(quote_sed_regexp "$var_pattern")/$(quote_sed_regexp "$var_replacement")/"
+# Taken from libshell.
+quote_sed_regexp()
+{
+	local out="$*"
+	if [ -z "${out##*[\[\].*&^\$\\\\/]*}" ]; then
+		out="$(printf %s "$out" |sed -e 's/[].*&^$[\/]/\\&/g')" ||
+			return 1
+	fi
+	printf %s "$out"
+}
+
+fi

@@ -1,0 +1,70 @@
+#!/bin/bash
+# shellcheck disable=SC2120
+
+cd "$(dirname "$0")" || exit 1
+source ./test-functions.sh
+
+_NL='\\n'
+cat >> "$macrosfile" <<-EOF
+	%su_stamp_into printf '%%s$_NL$_NL' '# This file provides a sysuser entry.'
+EOF
+
+check() {
+	local "$@"
+	export RPM_SYSUSERSDIR="$(rpmbuild --eval '%_sysusersdir')"
+	cat <<-EOF >"$t/test.spec"
+		Name: test-sysusers
+		Version: 0
+		Release: 0
+		Summary: Test %name
+		Group: Other
+		License: CC0
+		BuildArch: noarch
+		AutoReq: no
+		AutoProv: sysusers
+		%description
+		%install
+		%define Dir %buildroot%_sysusersdir
+		mkdir -p %Dir
+		%su_stamp_into > %Dir/jimbo.conf
+		echo >> %Dir/jimbo.conf 'u! _jimbo - "jimbo daemon"'
+		%su_stamp_into > %Dir/clink.conf
+		echo >> %Dir/clink.conf 'u! _clink 400:256 -'
+		%su_stamp_into > %Dir/g_mumbo4.conf
+		echo >> %Dir/g_mumbo4.conf 'g _mumbo4 - -'
+		%su_stamp_into > %Dir/g_mumbo3.conf
+		echo >> %Dir/g_mumbo3.conf 'g _mumbo3 -'
+		%su_stamp_into > %Dir/m_mumbo3.conf
+		%su_stamp_into > %Dir/m_mumbo4.conf
+		echo >> %Dir/m_mumbo3.conf 'm _clink _mumbo3'
+		echo >> %Dir/m_mumbo4.conf 'm	_clink _mumbo4'
+		%su_stamp_into > %Dir/rpm-s-m-kl.conf
+		echo >> %Dir/rpm-s-m-kl.conf 'u klangd - "Klang server" /var/lib/klangd /sbin/nologin'
+		echo >> %Dir/rpm-s-m-kl.conf 'm klangd klong'
+		%files
+		%_sysusersdir/*
+	EOF
+	run \
+		args="-bb" \
+		spec="$t/test.spec" \
+		callback=cb_query \
+		"$@"
+}
+
+topic="sysusers provides"
+cb_query() {
+        re_output="$t/query"
+        pkg="$t/RPM/RPMS/noarch/test-sysusers-0-0.noarch.rpm"
+        rpm -q -p "$pkg" --provides | tr '\n' '\0' > "$re_output"
+}
+check re="^user\(_jimbo\)" msg='user jimbo'
+check re="^group\(_jimbo\)" msg='implicit group jimbo'
+check re="^group\(_mumbo4\) = " msg='explicit group'
+# These two are intended to differ in 1 byte.
+check re="^groupmember\(_clink/_mumbo4\) = bSBfY2xpbmsgX211bWJvNAAA" msg='group membership'
+check re="^groupmember\(_clink/_mumbo3\) = bSBfY2xpbmsgX211bWJvMwAA" msg='whitespace collapsing'
+# These two are taken from rpm-s-m.
+user_kl=dSBrbGFuZ2QgLSAiS2xhbmcgc2VydmVyIiAvdmFyL2xpYi9rbGFuZ2QgL3NiaW4vbm9sb2dpbgAA
+grme_kl=bSBrbGFuZ2Qga2xvbmcA
+check re="^user\(klangd\) = $user_kl" msg='rpm-s-m user'
+check re="^groupmember\(klangd/klong\) = $grme_kl" msg='rpm-s-m groupmember'

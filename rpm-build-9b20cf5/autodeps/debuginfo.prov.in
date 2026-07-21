@@ -1,0 +1,73 @@
+#!/bin/sh -efu
+#
+# debuginfo.prov - soname-based provides for *.debug files
+#
+# Written by Alexey Tourbin <at@altlinux.org>.  Based on lib.prov.
+# License: GPLv2+.
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+
+dump_ld_config="${RPMB_TOOLS_DIR-@RPMCONFIGDIR@}/dump_ld_config"
+
+[ -n "${RPM_LIBDIR-}" ] || RPM_LIBDIR=`rpm --eval %_libdir`
+[ -n "${RPM_LIB-}" ] || RPM_LIB=`rpm --eval %_lib`
+
+DEF_RPM_FINDPROV_LIB_PATH="/$RPM_LIB $RPM_LIBDIR $("$dump_ld_config")"
+[ -z "${RPM_BUILD_ROOT-}" ] ||
+DEF_RPM_FINDPROV_LIB_PATH="$("$dump_ld_config" '' "$RPM_BUILD_ROOT") $DEF_RPM_FINDPROV_LIB_PATH"
+DEF_RPM_FINDPROV_LIB_PATH="$(IFS="$IFS:"; echo '' $DEF_RPM_FINDPROV_LIB_PATH '')"
+Debug "DEF_RPM_FINDPROV_LIB_PATH=$DEF_RPM_FINDPROV_LIB_PATH"
+
+DebugInfoProv()
+{
+	local debugf="$1"
+	local f="${debugf#${RPM_BUILD_ROOT-}/usr/lib/debug}"
+	f="${RPM_BUILD_ROOT-}${f%.debug}"
+	local fname="${f#${RPM_BUILD_ROOT-}}"
+	local dir="${fname%/*}"
+	local basename="${fname##*/}"
+
+	# Check library location.
+	[ -n "$dir" ] && [ -n "$basename" ] || return 0
+	# Unlike lib.prov, we do only sonames under default path.
+	# This is becuase we don't use ABI interface names for debuginfo
+	# dependencies, and there is no need to provide bare file paths.
+	[ -z "${DEF_RPM_FINDPROV_LIB_PATH##* $dir *}" ] || return 0
+
+	# Obtain objdump info.
+	local dump
+	if ! dump=$(objdump -p "$f"); then
+		Warning "$f: objdump failed"
+		return 0
+	fi
+
+	local soname suffix debug
+	soname=$(printf %s\\n "$dump" |sed -ne 's/^[[:space:]]*SONAME[[:space:]]\+\([^[:space:]]\+\)[[:space:]]*$/\1/p')
+	suffix=$(printf %s\\n "$dump" |sed -ne 's/^.*file format \(elf64\).*$/(64bit)/p')
+	[ -z "$suffix" ] && debug=debug || debug=debug64
+
+	# For libraries with soname, ignore all but files named as soname.
+	[ -z "$soname" ] || [ "$soname" = "$basename" ] || return 0
+
+	# Treat symlinks specially.
+	if [ -L "$f" ]; then
+		[ -n "$soname" ] || return 0
+		# Ignore symlinks leading out of buildroot.
+		local realpath
+		realpath=$(readlink -fv "$f")
+		[ -z "${realpath##${RPM_BUILD_ROOT-}/*}" ] || return 0
+		# Ignore symlinks to shorter locations.
+		local realdir
+		realdir=${realpath##${RPM_BUILD_ROOT-}}
+		realdir=${realdir%/*}
+		[ "${#dir}" -le "${#realdir}" ] || return 0
+	fi
+
+	# soname is either empty or equal to basename, so...
+	soname=$basename
+
+	printf '%s(%s)\n' "$debug" "$soname"
+}
+
+ArgvFileAction DebugInfoProv "$@"

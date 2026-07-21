@@ -1,0 +1,15 @@
+#!/bin/sh -efu
+while IFS=$'\t' read -r f t; do
+	case "$f" in
+		${RPM_BUILD_ROOT-}/usr/lib/debug/.build-id/*) continue ;;
+		${RPM_BUILD_ROOT-}/usr/lib/debug/*.debug) ;;
+		*) continue ;;
+	esac
+	case " $t" in
+		*' ELF '*' shared object, no machine, '*) continue ;;
+		*' ELF '*' shared object, '*) ;;
+		*' ELF '*' executable, '*) ;;
+		*) continue ;;
+	esac
+	printf '%s\n' "$f"
+done

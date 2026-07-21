@@ -1,0 +1,456 @@
+#!/bin/sh -efu
+#
+# This file provides FindPackage() function which maps paths and
+# commands, such as found in shell scripts, to rpm dependencies.
+#
+# Usage:
+#	. @RPMCONFIGDIR@/rpmb-find-package
+#	FindPackage src [path...] [command...]
+#
+# Arguments:
+#	src - the file being processed, used for diagnostics;
+#		also, if the file appears to reside under */sbin/
+#		directory, the PATH search order is adjusted
+#		so as to better match root code
+#	path - absolute path to file, e.g. /bin/cat
+#	command - executable expected to reside under standard
+#		PATH directories, e.g. cat
+#
+# Copyright (C) 2002-2003  Dmitry V. Levin <ldv@altlinux.org>
+# Copyright (C) 2007,2008  Alexey Tourbin <at@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+#
+
+if [ -z "${__included_rpmb_find_package-}" ]; then
+__included_rpmb_find_package=1
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+
+# We use different PATHs for */sbin/ and non-/sbin scripts.  However,
+# the distinction is not quite reliable -- there is simply no easy way
+# to discriminate between root-only and user-capable shell code.  Thus
+# we must use rather conservative path adjustment: 1) the set of user
+# and root directories is the same, it is only the order that differs;
+# 2) / has main priority over /usr, while as "bin vs sbin" distinction has
+# only secondary priority.  The reason is that / has only "most important"
+# contents, and /usr is used virtually "for everything else", whatever it is.
+# Now that / has a boost, there are simply less chances to end up with
+# unrelated dependencies.
+DEF_RPM_FINDPACKAGE_USER_PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/X11R6/bin:/usr/games
+DEF_RPM_FINDPACKAGE_ROOT_PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/X11R6/bin:/usr/games
+
+# RPM_FINDPACKAGE_PATH is exported by rpm-build
+RPM_FINDPACKAGE_USER_PATH="$(IFS="$IFS:"; set -f; echo '' ${RPM_FINDPACKAGE_PATH-} $DEF_RPM_FINDPACKAGE_USER_PATH |sed -e 's/  */:/g; s/^://')"
+RPM_FINDPACKAGE_ROOT_PATH="$(IFS="$IFS:"; set -f; echo '' ${RPM_FINDPACKAGE_PATH-} $DEF_RPM_FINDPACKAGE_ROOT_PATH |sed -e 's/  */:/g; s/^://')"
+Debug "RPM_FINDPACKAGE_USER_PATH=$RPM_FINDPACKAGE_USER_PATH"
+Debug "RPM_FINDPACKAGE_ROOT_PATH=$RPM_FINDPACKAGE_ROOT_PATH"
+
+# By default, FindPackage prefers virtual (most common) dependencies,
+# e.g. /usr/bin/perl -> /usr/bin/perl.  This is good for executables.
+# However, some binary dependencies should explicitly map to host-system
+# package names, e.g. /usr/lib/libdb.so -> libdb4.4-devel.  Localizing
+# the following variable with non-empty value will tweak FindPackage
+# to use the latter plan.
+RPM_FINDPACKAGE_HOST_PKG_NAMES=
+
+# When an interpreter is invoked by name, as in "#!/usr/bin/env python32",
+# and is missing, this can force the dependency on /usr/bin/python32.
+RPM_FINDPACKAGE_MANDATORY=
+
+# Below we use 'local Verbose=Info' to increase per-case verbosity.
+Verbose=Verbose
+
+FindByFileUnderBuildroot()
+{
+	local f="$1" rep="$2" xbrep; shift 2 || return
+	[ -n "${RPM_BUILD_ROOT-}" ] || return 0
+
+	MatchBuildroot()
+	{
+		[ -n "$1" ] &&
+		[ -z "${1##$RPM_BUILD_ROOT/*}" ]
+	}
+	StatPrint()
+	{
+		[ -e "$1" -o -L "$1" ] &&
+		printf '%s\n' "${1#$RPM_BUILD_ROOT}"
+	}
+
+	xbrep=$(CanonPath "$RPM_BUILD_ROOT$rep")
+	if MatchBuildroot "$xbrep"; then
+		# Good.  The path was canonicalized against buildroot.
+		StatPrint "$xbrep" && return 0
+	else
+		# Too bad.  The path was canonicalized outside buildroot.
+		# They should fix their symbolic links.
+		Warning "$f: $rep cannot be canonicalized under RPM_BUILD_ROOT"
+		# Consider this: RPM_BUILD_ROOT/A/B/C -> /D/C
+		#				  `-> /D
+		# It still makes sense to check /D/C under RPM_BUILD_ROOT.
+		xbrep=$(CanonPath "$RPM_BUILD_ROOT$xbrep")
+		MatchBuildroot "$xbrep" && StatPrint "$xbrep" && return 0
+	fi
+
+	# They might also ask if /etc/init.d/foo is under RPM_BUILD_ROOT.
+	# That would be /etc/rc.d/init.d/foo.
+	xbrep=$(CanonPath "$rep")
+	xbrep=$(CanonPath "$RPM_BUILD_ROOT$xbrep")
+	MatchBuildroot "$xbrep" && StatPrint "$xbrep" && return 0
+
+	# Not there.  Not now.
+	:
+}
+
+FindByFile()
+{
+	# Dependence name starts with `/'.
+	local f="$1" rep="$2" package; shift 2 || return
+
+	# Does it start with %_builddir or %buildroot?
+	if [ -n "${RPM_BUILD_DIR-}" ] && [ -z "${rep##$RPM_BUILD_DIR*}" ]; then
+		Info "$f: invalid dependency: $rep"
+		return 1
+	fi
+	if [ -n "${RPM_BUILD_ROOT-}" ] && [ -z "${rep##$RPM_BUILD_ROOT*}" ]; then
+		Info "$f: invalid dependency: $rep"
+		return 1
+	fi
+
+	# Does it belong to buildroot?
+	local xbrep
+	xbrep=$(FindByFileUnderBuildroot "$f" "$rep")
+	if [ -n "$xbrep" ]; then
+		# The file is under buildroot.  We emit file-level dependency.
+		# If the file is in the same package, rpm-build will optimize
+		# out the dependency.  Otherwise, the file is to be packaged
+		# into another subpackage, and we get something like more strict
+		# dependencies between subpackages.
+		if [ ! -L "$RPM_BUILD_ROOT$xbrep" -a -d "$RPM_BUILD_ROOT$xbrep" ]; then
+			# They require a directory.  Here we do only "weak" directory
+			# dependencies (i.e. sometimes we prefer to omit such dependencies).
+			# We only need to make sure that the directory actually exists after
+			# install, which is the case if there are packaged files under the
+			# directory.
+			local dirfiles
+			if dirfiles=$(PackagedFiles |grep -F "$xbrep") &&
+			   dirfiles=$(echo '' $dirfiles '') &&
+			   [ -n "${dirfiles##* $xbrep *}" ] &&
+			   [ -z "${dirfiles##* $xbrep/*}" ]; then
+				Warning "$f: directory $xbrep not owned by the package"
+				return 0
+			fi
+		fi
+		$Verbose "$f: $rep -> \$RPM_BUILD_ROOT$xbrep"
+		printf '%s\n' "$xbrep"
+		return 0
+	fi
+
+	# Is it an alternative?  Path components can be alternatives, too.
+	local alt_break= alt xalt xrep p
+	xrep=$(readlink -vm "$rep")
+	# Blind cleanup-only canonicalization required (the same as CanonPath first pass),
+	# to fold intermediate path components.  E.g. in /usr/share/foo/../java/rt.jar,
+	# /usr/share/foo might not exist, but [ -L .../rt.jar ] test should still work.
+	# XXX This "blind" technique is basically wrong -- one cannot always fold ".."
+	# along with previous path component, specifically if the previous path component
+	# is a symbolic link.
+	p=$(readlink -vm "/-$$-/$rep")
+	p=${p##/-$$-}
+	while [ -n "$p" ]; do
+		# Check each path component whether it is an alternative.
+		if [ -L "$p" ] && readlink -v "$p" |grep -qs '^/etc/alternatives/'; then
+			alt=$(CanonPath "$p")
+			Verbose "$f: $rep -> $p -> $alt (alternative)"
+			printf '%s\n' "$alt"
+			# Now we have to decide if this alternative should eventually
+			# prevent final $rep dependency resolution.
+			xalt=$(readlink -vm "$p")
+			case "$xrep" in
+				"$xalt")
+					# alternative and $rep are more or less the same
+					alt_break=1 ;;
+				"$xalt"/*)
+					# $rep is under alternative dir, too bad
+					Info "$f: alternative $alt prevents $rep dependency resolution"
+					alt_break=1 ;;
+			esac
+		fi
+		p=${p%/*}
+	done
+	[ -z "$alt_break" ] || return 0
+	unset p alt_break alt xalt xrep ||:
+
+	# Hard time checking $rep path components is over.
+	# Now we are ready to apply our know-how.
+	rep=$(CanonPath "$rep")
+
+	# Ignore pseudo-filesystem dependencies.
+	local dir="${rep#/}"; dir="${dir%%/*}"
+	case "$dir" in
+		dev | proc | sys )
+			$Verbose "$f: $rep -> /$dir (skip)"
+			return ;;
+	esac
+	unset dir
+
+	if [ -n "$RPM_FINDPACKAGE_HOST_PKG_NAMES" ] &&
+	   package=$(rpmquery --whatprovides --queryformat='%{NAME}\n' -- "$rep" 2>/dev/null); then
+		package=$(printf %s "$package" |LC_COLLATE=C sort -u)
+		local n="$(IFS=$'\n'; set -- $package; echo $#)"
+		if [ "$n" = 1 ]; then
+			# Prune generic devel deps generated by pkgconfiglib.req and cpp.req.
+			case $package in
+				gcc | gcc-c++ | gcc[34].[0-9] | gcc[34].[0-9]-c++ | \
+				gcc[5-9] | gcc[5-9]-c++ | gcc[1-9][0-9] | gcc[1-9][0-9]-c++ | \
+				libstdc++-devel | libstdc++[34].[0-9]-devel | \
+				libstdc++[5-9]-devel | libstdc++[1-9][0-9]-devel | \
+				glibc-devel | \
+				lcc[0-9].[0-9][0-9] | lcc[0-9].[0-9][0-9]-c++ )
+					$Verbose "$f: $rep -> $package (skip, generic devel)"
+					;;
+				*)
+					$Verbose "$f: $rep -> $package (via rpmdb)"
+					printf %s\\n "$package"
+					;;
+			esac
+			return
+		elif [ "$n" -gt 1 ]; then
+			Info "$f: $rep provided by:$(echo '' $package)"
+			Info "$f: $rep -> $rep (raw, ambiguous, via rpmdb)"
+			printf %s\\n "$rep"
+			return
+		fi
+	fi
+
+	if [ -e "$rep" ] || rpmquery --whatprovides -- "$rep" >/dev/null 2>&1; then
+		$Verbose "$f: $rep -> $rep (raw)"
+	else
+		Info "$f: $rep -> $rep (raw, not installed)"
+	fi
+
+	printf %s\\n "$rep"
+}
+
+FindByName()
+{
+	local f="$1" r="$2" rep package; shift 2 || return
+
+	local dir="${f%/*}"; dir="${dir#${RPM_BUILD_ROOT-}}"
+	local findpackage_path="$RPM_FINDPACKAGE_USER_PATH"
+	case "$dir" in
+		*/sbin | "" ) # %buildroot dir is used to save scriptlets
+			findpackage_path="$RPM_FINDPACKAGE_ROOT_PATH" ;;
+		/etc/*)
+			dir="${dir#/etc/}"; dir="${dir%%/*}"
+			case "$dir" in
+				# The sbin-ish places.  WARNING: Explicit Content!
+				rc.d | init.d | control.d | chroot.d | net | ppp | cron* | hotplug* )
+					Debug "$f: root PATH on"
+					findpackage_path="$RPM_FINDPACKAGE_ROOT_PATH" ;;
+			esac
+			;;
+	esac
+	unset dir
+
+	# Check buildroot first.
+	if [ -n "${RPM_BUILD_ROOT-}" ]; then
+		rep=$(IFS="$IFS:"; set -f
+			for dir in $findpackage_path; do
+				rep="$dir/$r"
+				BR_rep="$RPM_BUILD_ROOT/$rep"
+				if [ -f "$BR_rep" -o -L "$BR_rep" ]; then
+					printf '%s\n' "$rep"
+					break
+				fi
+			done)
+		if [ -n "$rep" ]; then
+			$Verbose "$f: $r -> \$RPM_BUILD_ROOT$rep"
+			printf '%s\n' "$rep"
+			return
+		fi
+	fi
+
+	# Record each command name we search.
+	if [ -n "${RPM_FINDPACKAGE_COMMANDS_LOG-}" ]; then
+		printf '%s\n' "$r" >>"$RPM_FINDPACKAGE_COMMANDS_LOG"
+	fi
+
+	# Check for pkg contents binary index.
+	local save_rep= save_package=
+	if [ -n "${RPM_PKG_CONTENTS_INDEX_BIN-}" ] && [ -s "$RPM_PKG_CONTENTS_INDEX_BIN" ] && [ -r "$RPM_PKG_CONTENTS_INDEX_BIN" ]; then
+		local out="$(awk -v r="$r" -v findpackage_path="$findpackage_path" '
+			BEGIN {
+				# Here we enumerate all possible paths to keep the order;
+				# later we sort the result with "sort -n".
+				n = split(findpackage_path, ary, ":")
+				for (i = 1; i <= n; i++) {
+					dir = ary[i]
+					sub("/+$", "", dir)
+					file = dir "/" r
+					if (dir && !(file in FILES))
+						FILES[file] = i
+				}
+				# By now FILES is normally something like this:
+				#	/bin/r		1
+				#	/sbin/r		2
+				#	/usr/bin/r	3
+				#	/usr/sbin/r	4
+				#	...
+			}
+			NF==2 && ($1 in FILES) {
+				# Possible output is like this:
+				#	3	/usr/bin/r	pkgA
+				#	1	/bin/r		pkgB
+				print FILES[$1] "\t" $1 "\t" $2
+			}
+			' "$RPM_PKG_CONTENTS_INDEX_BIN" |
+				# Best paths go first:
+				sort -n |
+				# For each package, keep only the best path:
+				sort -u -k3 |
+				# Best paths still go first:
+				sort -n |
+				# Well done, discard numbers.
+				cut -f2-)"
+		local n="$(IFS=$'\n'; set -- $out; echo $#)"
+		if [ "$n" = 1 ]; then
+			rep="$(IFS=$'\t\n'; set -- $out; printf %s "$1")"
+			package="$(IFS=$'\t\n'; set -- $out; printf %s "$2")"
+			$Verbose "$f: $r -> $rep -> $package (via contents_index_bin)"
+			printf %s\\n "$package"
+			return
+		elif [ "$n" -gt 1 ]; then
+			# Content index search produced a confict: we have 2 or more paths
+			# from different packages.  Consider this case:
+			#	/usr/bin/r	pkgA
+			#	/usr/bin/r	pkgB
+			#	/usr/sbin/r	pkgC
+			# Remember that best paths go first, and each package has only the best path.
+			# Now if the first two paths are the same, we produce raw dependency on /usr/bin/r.
+			local Verbose=Info
+			Info "$f: $r indexed by:$(printf %s "$out" |sed -e 's/\t/ -> /; s/$/,/; $s/,$//' |xargs echo '')"
+			rep="$(IFS=$'\t\n'; set -- $out; printf %s "$1")"
+			package="$(IFS=$'\t\n'; set -- $out; printf %s "$2")"
+			# Actually our contents_index generator already handles path dups,
+			# so the above example is likely to transform into this:
+			#	/usr/bin/r	/usr/bin/r
+			#	/usr/sbin/r	pkgC
+			# So we first check if path = package.
+			if [ "$rep" = "$package" ]; then
+				Info "$f: $r -> $rep -> $rep (ambiguous, via contents_index_bin)"
+				printf %s\\n "$rep"
+				return
+			fi
+			# And then we check if the first two paths are the same.
+			local rep2="$(IFS=$'\t\n'; set -- $out; printf %s "$3")"
+			if [ "$rep" = "$rep2" ]; then
+				Info "$f: $r -> $rep -> $rep (raw, ambiguous, via contents_index_bin)"
+				printf %s\\n "$rep"
+				return
+			fi
+			# However, consider yet worse real-life case:
+			#	/usr/bin/arpsend	arpsend
+			#	/usr/sbin/arpsend	vzctl
+			# In this case, we perfer to put aside the conflict for a while, and query
+			# the host system first.  There's a good chance that the right package, either
+			# arpsend or vzctl, IS installed, and other unrelated packages are NOT installed.
+			# However, if the host system does not provide any candidate, we have to produce
+			# the dependency on /usr/bin/arpsend -> arpsend.
+			save_rep="$rep" save_package="$package"
+		fi
+	fi
+
+	# Lookup in the host system.
+	rep=$(IFS="$IFS:"; set -f
+		for dir in $findpackage_path; do
+			rep="$dir/$r"
+			if [ -f "$rep" ]; then
+				printf '%s\n' "$rep"
+			fi
+		done)
+	if [ -n "$rep" ]; then
+		local n="$(IFS=$'\n'; set -- $rep; echo $#)"
+		if [ "$n" -gt 1 ]; then
+			# We've got a few paths, e.g. awk -> {/bin/awk,/usr/bin/awk};
+			# we check if all paths really point to the same file.
+			n="$(IFS=$'\n'; for f in $rep; do readlink -vm "$f"; done |sort -u |wc -l)"
+			if [ "$n" -gt 1 ]; then
+				local Verbose=Info
+				Info "$f: host_env $r:$(echo '' $rep)"
+			fi
+			# But we select the first path, which is the best, anyway.
+			rep="$(IFS=$'\n'; set -- $rep; printf %s "$1")"
+		fi
+		if [ -n "$rep" ]; then
+			$Verbose "$f: $r -> $rep -> ... (via host_env)"
+			local RPM_FINDPACKAGE_HOST_PKG_NAMES=1
+			FindByFile "$f" "$rep"
+			return
+		fi
+	fi
+
+	# Reconsult package binary index.
+	if [ -n "$save_rep" ] && [ -n "$save_package" ]; then
+		rep="$save_rep" package="$save_package"
+		$Verbose "$f: $r -> $rep -> $package (via contents_index_bin)"
+		printf %s\\n "$package"
+		return
+	fi
+
+	# Not found.
+	local maybe_function=
+	case "$r" in
+		*[!A-Za-z0-9_]*) ;;
+		[!A-Za-z_]*) ;;
+		*[A-Z_]*) maybe_function=1 ;;
+	esac
+	if [ -n "$RPM_FINDPACKAGE_MANDATORY" ]; then
+		Info "$f: $r not found, forcing /usr/bin/$r"
+		printf '%s\n' "/usr/bin/$r"
+	elif [ -n "$maybe_function" ]; then
+		$Verbose "$f: $r not found (skip, maybe function)"
+	else
+		Info "$f: $r not found (skip)"
+	fi
+}
+
+FindPackage()
+{
+	local f="$1" r; shift || return
+	for r; do
+		local Verbose=Verbose
+		# Only these characters are allowed for pathnames or commands:
+		valid='A-Za-z0-9/@=.,:_+-'
+		case "$r" in
+			/*[!$valid]*)
+				Info "$f: invalid pathname: $r" ;;
+			/*[!/.]*)
+				FindByFile "$f" "$r" ;;
+			*/*)
+				Info "$f: invalid pathname: $r" ;;
+			-*)
+				Info "$f: invalid command: $r" ;;
+			*[!$valid]*)
+				Info "$f: invalid command: $r" ;;
+			'')
+				Verbose "$f: empty command?" ;;
+			*)
+				FindByName "$f" "$r" ;;
+		esac
+	done
+}
+
+fi

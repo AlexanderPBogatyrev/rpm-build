@@ -1,0 +1,72 @@
+#!/bin/sh -e
+#
+# Copyright (C) 2008  Alexey Tourbin <at@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+
+# library flag
+lib=
+
+# system library flag
+sys=
+
+while read -r f; do
+	# 0) Short circuit condition: if a library is already found,
+	# skip the remaining list of non-system libraries.  Note that
+	# the input file list is sorted, and "/lic" collates after
+	# "/lib" and "/lib64".
+	if [ -n "$lib" ] && LC_ALL=C [ "$f" '>' "/lic" ]; then
+		#echo >&2 break="$f"
+		break
+	fi
+	# 1) Check if basename looks like a shared library.
+	case "${f##*/}" in
+		lib*.so*)
+			#echo >&2 lib="$f"
+			lib=1
+			;;
+		*) continue
+			;;
+	esac
+	# 2) It is also possible to check dirname and skip private
+	# directories (public ones are /lib, /lib64, /usr/lib, and
+	# /usr/lib64).  However, non-standard directories can be added
+	# via /etc/ld.so.conf (we can use our dump_ld_config helper
+	# to print non-standard directories).  And another problem
+	# is hwcap-specific directories, e.g. /usr/lib/sse2 (for wich
+	# there is no helper yet).
+	# 3) It is even possible to skip ld(1)-only symbolic links:
+	# if basename matches lib*.so, and corresponding $f.* file(s)
+	# exist, then $f appears to be a compile-time symbolic link.
+	# However, /etc/ld.so.cache seems to include both sonames and
+	# non-soname lib*.so entries.
+	# 4) Check whether it is a system library.
+	case "$f" in
+		/lib/* | /lib64/* )
+			#echo >&2 sys="$f"
+			sys=1
+			break
+			;;
+	esac
+done
+
+if [ -n "$lib" ]; then
+	/sbin/ldconfig
+fi
+
+[ -n "$sys" ] || exit 0
+
+telinit=/sbin/telinit
+if [ -x "$telinit" ] &&
+   [ -L /proc/1/exe -a -L /proc/1/root -a -f /proc/1/maps ]; then
+	grep -qs '(deleted) \| (deleted)' /proc/1/maps &&
+	"$telinit" u ||:
+fi
+
+update_chrooted=/sbin/update_chrooted
+if [ -x "$update_chrooted" ]; then
+	"$update_chrooted" lib
+fi

@@ -1,0 +1,122 @@
+#!/bin/sh -efu
+#
+# Copyright (C) 2000-2007,2011  Dmitry V. Levin <ldv@altlinux.org>
+# Copyright (C) 2007       Alexey Tourbin <at@altlinux.org>
+#
+# find-provides - generate list of linux-specific package provides.
+# Inspired by tool with same name from RPM distribution.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+#
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+ValidateBuildRoot
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/tmpdir.sh
+
+methods=$(SetupMethods prov "$RPM_FINDPROV_METHOD")
+if [ -z "$methods" ]; then
+	Info 'AutoProv disabled, nothing to do'
+	cat > /dev/null
+	exit 0
+fi
+
+# filter file list through TOPDIR and SKIPLIST patterns
+while IFS= read -r f; do
+	fname="${f#$RPM_BUILD_ROOT}"
+	printf '%s\n' "$fname" >&3
+	if [ -n "${RPM_FINDPROV_TOPDIR-}" ] && [ -z "${fname%%$RPM_FINDPROV_TOPDIR/*}" ]; then
+		Debug "skip $f due to RPM_FINDPROV_TOPDIR=$RPM_FINDPROV_TOPDIR"
+		continue
+	fi
+	if [ -n "${RPM_FINDPROV_SKIPLIST-}" ]; then
+		for skip in $RPM_FINDPROV_SKIPLIST; do
+			if [ -z "${fname##$skip}" ]; then
+				Debug "skip $f due to RPM_FINDPROV_SKIPLIST pattern $skip"
+				continue 2
+			fi
+		done
+	fi
+	if [ -L "$f" ]; then
+		to="$(readlink "$f")"
+		case "$fname:$to" in
+			/usr/lib/debug/.build-id/*.debug:*) ;;
+			/usr/lib/debug/.build-id/*:*/lib/modules/*.ko)
+				Debug "skip $f -> $to due to debuginfo symlink to uncompressed kmodule"
+				continue
+				;;
+		esac
+		if [ -n "$to" -a -z "${to##/*}" ]; then
+			Info "absolute symbolic link $f -> $to is not going to provide anything"
+			continue
+		elif ! [ -e "$f" ]; then
+			Info "broken symbolic link $f -> $to is not going to provide anything"
+			continue
+		fi
+	fi
+	printf '%s\n' "$f"
+done >"$tmpdir"/files 3>"$RPM_BUILD_ROOT/.files:$RPM_SUBPACKAGE_NAME"
+
+# filter file list through file(1) to append types (dereference symlinks)
+if ! file4 -L -NF$'\t' -f "$tmpdir"/files >"$tmpdir"/files+types; then
+	sed -n '/\t *ERROR:/p' "$tmpdir"/files+types >&2
+	exit 1
+fi
+
+found=
+RunMethod()
+{
+	local exe="$1"; shift
+	local filter="$exe".files
+	if ! [ -x "$filter" ]; then
+		# XXX should be Fatal
+		Info "$filter not available"
+		return
+	fi
+	local filelist="$tmpdir/${exe##*/}".files
+	local deplist="$tmpdir/${exe##*/}".deps
+	Debug "running $filter"
+	"$filter" <"$tmpdir"/files+types >"$filelist" ||
+		Fatal "$filter failed"
+	Verbose "$filter: $(wc -l <"$filelist") files"
+	[ -s "$filelist" ] || return 0
+	# XXX validate $filelist
+	Debug "running $exe"
+	"$exe" <"$filelist" >"$deplist" ||
+		Fatal "$exe failed"
+	if [ -s "$deplist" ]; then
+		LC_COLLATE=C sort -u -o "$deplist" "$deplist"
+		Verbose "$exe: $(wc -l <"$deplist") dependencies"
+		found=1
+	else
+		rm -f "$deplist"
+	fi
+}
+
+Info "running scripts ($methods)"
+RunMethods prov "$methods" RunMethod
+
+if [ -n "$found" ]; then
+	(set +f && LC_ALL=C sort -u -m "$tmpdir"/*.deps) >"$tmpdir"/find-provides-deps || false
+	if [ -n "${RPM_FIND_PROVIDES_FILTER-}" ]; then
+		(eval "set -x; $RPM_FIND_PROVIDES_FILTER") <"$tmpdir"/find-provides-deps >"$tmpdir"/filter-provides-deps
+		[ $? = 0 ] || Fatal "filter failed"
+		(cd "$tmpdir" && diff -U1 find-provides-deps filter-provides-deps) >&2 ||:
+		cat "$tmpdir"/filter-provides-deps
+	else
+		cat "$tmpdir"/find-provides-deps
+	fi
+fi

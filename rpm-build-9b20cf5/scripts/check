@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -efu -o pipefail
+cd $(dirname "$0")
+find . ../autodeps -type f -not -name '*~' |
+file4 --mime-type -NF$'\t' -f- |
+while IFS=$'\t' read -r f t; do
+	t=${t# }
+	case "$t" in
+		text/x-shellscript)
+			(set -x; bash -n "$f")
+			;;
+		text/x-awk)
+			(set -x; awk --lint -f "$f" </dev/null)
+			;;
+		*)
+			echo >&2 "Unchecked [$t] $f"
+			;;
+	esac
+
+done

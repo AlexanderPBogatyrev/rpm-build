@@ -1,0 +1,339 @@
+#!/bin/sh -e
+#
+# find-lang - generate list of language specific files.
+# Inspired by tool with same name from W. L. Estes <wlestes@uncg.edu>.
+#
+# Copyright (C) 2000-2013  Dmitry V. Levin <ldv@altlinux.org>
+#
+# 2012-05-23 Igor Vlasenko <viy@altlinux.org>
+#   * added PLD/fedora compatible all-name option (mkochano,pascalek@PLD)
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <http://www.gnu.org/licenses/>.
+#
+
+: ${RPMCONFIGDIR:=@RPMCONFIGDIR@}
+. "$RPMCONFIGDIR/rpmb-functions"
+[ -n "${RPM_DATADIR-}" ] || RPM_DATADIR="$(rpmbuild --eval %_datadir)"
+
+Usage()
+{
+	[ "$1" = 0 ] || exec >&2
+	cat <<EOF
+find-lang - generate list of language specific files for inclusion in an rpm spec %files section.
+
+Usage: $PROG options PACKAGE_NAME...
+
+Top directory gets sed'd out of the output list.  PACKAGE_NAME is usually
+the %{name} of the package.  This should also be the basename of the
+.mo files.
+
+Valid options are:
+  --without-mo              do not look for locales files;
+  --with-man                look for man pages;
+  --with-gnome              look for GNOME help and omf files;
+  --with-kde                look for KDE help files;
+  --with-qt                 look for QT translation files;
+  --all-name                match all package/domain names;
+  --custom-dir-script=FILE  look for directories using specified sed script;
+  --custom-file-script=FILE look for files using specified sed script;
+  --custom-link-script=FILE look for symlinks using specified sed script;
+  --append                  do not truncate output file before writing;
+  --output=FILENAME         filename where to write output,
+                            PACKAGE_NAME.lang by default;
+  --topdir=TOPDIR           the top of the tree containing the files to be
+                            processed, \$RPM_BUILD_ROOT by default;
+  --version                 print program version and exit;
+  --help                    show this text and exit.
+
+Report bugs to http://bugs.altlinux.ru/
+
+EOF
+	[ -n "$1" ] && exit "$1" || exit
+}
+
+print_version()
+{
+	local revision=`printf %s '$Revision$' |sed -ne 's/^\$Revision: \+\([^ ]\+\).*/\1/p'` ||:
+	cat <<EOF
+find-lang version $revision
+
+Copyright (C) 2000-2013  Dmitry V. Levin <ldv@altlinux.org>
+
+This is free software; see the source for copying conditions.
+There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+Written by Dmitry V. Levin <ldv@altlinux.org>
+EOF
+	exit 0
+}
+
+TEMP=`getopt -n "$PROG" -o h -l without-mo,with-man,with-gnome,with-kde,with-qt,all-name,custom-dir-script:,custom-file-script:,custom-link-script:,append,output:,topdir:,help,version -- "$@"` || Usage
+eval set -- "$TEMP"
+
+: ${TOPDIR:=$RPM_BUILD_ROOT}
+FIND_MO=1
+FIND_MAN=
+FIND_GNOME=
+FIND_KDE=
+FIND_QT=
+ALL_NAME=
+CUSTOM_DIR_SCRIPT=
+CUSTOM_FILE_SCRIPT=
+CUSTOM_LINK_SCRIPT=
+APPEND=
+OUTPUT=
+NAME=
+while :; do
+	case "$1" in
+		--without-mo)
+			FIND_MO=
+			;;
+		--with-man)
+			FIND_MAN=1
+			;;
+		--with-gnome)
+			FIND_GNOME=1
+			;;
+		--with-kde)
+			FIND_KDE=1
+			;;
+		--with-qt)
+			FIND_QT=1
+			;;
+		--append)
+			APPEND=1
+			;;
+		--all-name)
+			ALL_NAME=1
+			;;
+		--custom-dir-script)
+			shift
+			CUSTOM_DIR_SCRIPT="$1"
+			;;
+		--custom-file-script)
+			shift
+			CUSTOM_FILE_SCRIPT="$1"
+			;;
+		--custom-link-script)
+			shift
+			CUSTOM_LINK_SCRIPT="$1"
+			;;
+		--output)
+			shift
+			OUTPUT="$1"
+			;;
+		--topdir)
+			shift
+			TOPDIR="$1"
+			;;
+		-h|--help)
+			Usage 0
+			;;
+		--version) print_version
+			;;
+		--)
+			shift
+			break
+			;;
+		*)
+			Fatal "unrecognized option: $1"
+			;;
+	esac
+	shift
+done
+
+# At least one argument, please.
+[ "$#" -ge 1 ] || Usage
+
+cd "$TOPDIR"
+cd "$OLDPWD"
+
+TOPDIR="$(printf %s "$TOPDIR" |sed -e '
+s:/\(\./\)\+:/:g
+s:/\+:/:g
+s:/$::
+')"
+
+[ -n "$TOPDIR" ] || Fatal "invalid TOPDIR"
+
+FindLang()
+{
+	local RLOCALE='\([a-z]\{2,3\}\)\(_[A-Z]\{2\}\)\?\(@[a-z]\{3,\}\)\?\(\.[A-Z][a-zA-Z0-9]\+\(-[A-Z0-9]\)\?\)\?'
+	local RCLOCALE='\(C\|[a-z]\{2,3\}\)\(_[A-Z]\{2\}\)\?\(@[a-z]\{3,\}\)\?\(\.[A-Z][a-zA-Z0-9]\+\(-[A-Z0-9]\)\?\)\?'
+
+	if [ -n "$ALL_NAME" ]; then
+		PATTERN='[a-zA-Z0-9][a-zA-Z0-9._+-]*'
+	else
+		PATTERN="$NAME"
+	fi
+	# truncate if required
+	[ -n "$APPEND" ] || :>"$OUTFILE"
+
+	echo '%defattr(644,root,root,755)' >>"$OUTFILE"
+
+	if [ -n "$FIND_MO" ]; then
+		find "$TOPDIR" -type f |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:\(.*/locale/'"$RLOCALE"'/\([^/]\+/\)*'"$PATTERN"'\.mo\)$:%lang(\2) \1:
+s:^[^%].*::
+s:^%lang(en) ::
+/^$/d
+		'
+		find "$TOPDIR" -type l |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:\(.*/locale/'"$RLOCALE"'/\([^/]\+/\)*'"$PATTERN"'\.mo\)$:%lang(\2) %attr(-,root,root) \1:
+s:^[^%].*::
+s:^%lang(en) ::
+/^$/d
+		'
+	fi >> "$OUTFILE"
+
+	if [ -n "$FIND_MAN" ]; then
+		find "$TOPDIR" -type f |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:\(.*/share/man/'"$RLOCALE"'/[^/]\+/'"$PATTERN"'\.[0-9a-z]\+\)\(\.[^/]\+\)\?$:%lang(\2) \1*:
+s:^[^%].*::
+s:^%lang(en) ::
+/^$/d
+		'
+		find "$TOPDIR" -type l |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:\(.*/share/man/'"$RLOCALE"'/[^/]\+/'"$PATTERN"'\.[0-9a-z]\+\)\(\.[^/]\+\)\?$:%lang(\2) %attr(-,root,root) \1*:
+s:^[^%].*::
+s:^%lang(en) ::
+/^$/d
+		'
+	fi >> "$OUTFILE"
+
+	if [ -n "$FIND_GNOME" ]; then
+# GNOME starting with version 3.2 stores its help files in $RPM_DATADIR/help/%lang/$NAME
+		find $TOPDIR -type d |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:^\('"$RPM_DATADIR"'/help/'"$RCLOCALE"'/'"$PATTERN"'\(/.*\)\?\)$:%lang(\2) %dir \1:
+s:\(.*/gnome/help/'"$PATTERN"'\)$:%dir \1:
+s:\(.*/gnome/help/'"$PATTERN"'/'"$RCLOCALE"'\(/.*\)\?\)$:%lang(\2) %dir \1:
+s:\(.*/share/omf/'"$PATTERN"'\)$:%dir \1:
+s:^[^%].*::
+s:^%lang(\(en\|C\)) ::
+/^$/d
+		'
+		find "$TOPDIR" -type f |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:^\('"$RPM_DATADIR"'/help/'"$RCLOCALE"'/'"$PATTERN"'/\):%lang(\2) \1:
+s:\(.*/gnome/help/'"$PATTERN"'/'"$RCLOCALE"'\(/.*\)\?\)$:%lang(\2) \1:
+s:\(.*/share/omf/'"$PATTERN"'/[^/]*-'"$RCLOCALE"'\.omf\)$:%lang(\2) \1:
+s:^[^%].*::
+s:^%lang(\(en\|C\)) ::
+/^$/d
+		'
+		find "$TOPDIR" -type l |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:^\('"$RPM_DATADIR"'/help/'"$RCLOCALE"'/'"$PATTERN"'/\):%lang(\2) %attr(-,root,root) \1:
+s:\(.*/gnome/help/'"$PATTERN"'/'"$RCLOCALE"'\(/.*\)\?\)$:%lang(\2) %attr(-,root,root) \1:
+s:\(.*/share/omf/'"$PATTERN"'/[^/]*-'"$RCLOCALE"'\.omf\)$:%lang(\2) %attr(-,root,root) \1:
+s:^[^%].*::
+s:^%lang(\(en\|C\)) ::
+/^$/d
+		'
+	fi >> "$OUTFILE"
+
+	if [ -n "$FIND_KDE" ]; then
+		find $TOPDIR -type d |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:\(.*/share/\([^/]\+/\)\?doc/HTML/'"$RLOCALE"'/'"$PATTERN"'\(/.*\)\?\)$:%lang(\3) %dir \1:
+s:^[^%].*::
+s:^%lang(en) ::
+/^$/d
+	        '
+		find "$TOPDIR" -type f |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:\(.*/share/\([^/]\+/\)\?doc/HTML/'"$RLOCALE"'/'"$PATTERN"'/\):%lang(\3) \1:
+s:^[^%].*::
+s:^%lang(en) ::
+/^$/d
+		'
+		find "$TOPDIR" -type l |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:\(.*/share/\([^/]\+/\)\?doc/HTML/'"$RLOCALE"'/'"$PATTERN"'/\):%lang(\3) %attr(-,root,root) \1:
+s:^[^%].*::
+s:^%lang(en) ::
+/^$/d
+		'
+	fi >> "$OUTFILE"
+
+	if [ -n "$FIND_QT" ]; then
+		find "$TOPDIR" -type f |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:^\(/.*/'"$PATTERN"'/.\+/'"$RLOCALE"'/[a-z][a-z0-9]*\.qm\)$:%lang(\2) \1:
+s:^\(/.*/'"$PATTERN"'[_./-]'"$RLOCALE"'\.qm\)$:%lang(\2) \1:
+s:^\(/.*/'"$PATTERN"'/.\+/\([a-zA-Z0-9][a-zA-Z0-9._+-]*[_.-]\)\?'"$RLOCALE"'\.qm\)$:%lang(\3) \1:
+s:^[^%].*::
+s:^%lang(en) ::
+/^$/d
+		'
+		find "$TOPDIR" -type l |sed -e '
+s:'"$TOPDIR"'::
+s:^[^/].*::
+s:^\(/.*/'"$PATTERN"'/.\+/'"$RLOCALE"'/[a-z][a-z0-9]*\.qm\)$:%lang(\2) %attr(-,root,root) \1:
+s:^\(/.*/'"$PATTERN"'[_./-]'"$RLOCALE"'\.qm\)$:%lang(\2) %attr(-,root,root) \1:
+s:^\(/.*/'"$PATTERN"'/.\+/\([a-zA-Z0-9][a-zA-Z0-9._+-]*[_.-]\)\?'"$RLOCALE"'\.qm\)$:%lang(\3) %attr(-,root,root) \1:
+s:^[^%].*::
+s:^%lang(en) ::
+/^$/d
+		'
+	fi >> "$OUTFILE"
+
+	if [ -n "$CUSTOM_DIR_SCRIPT" ]; then
+		[ -r "$CUSTOM_DIR_SCRIPT" ] && custom_opt=f || custom_opt=e
+		find $TOPDIR -type d |
+			sed -e "s:$TOPDIR::" -$custom_opt "$CUSTOM_DIR_SCRIPT" |
+			grep -v '^$' >> "$OUTFILE" ||:
+	fi
+
+	if [ -n "$CUSTOM_FILE_SCRIPT" ]; then
+		[ -r "$CUSTOM_FILE_SCRIPT" ] && custom_opt=f || custom_opt=e
+		find "$TOPDIR" -type f |
+			sed -e "s:$TOPDIR::" -$custom_opt "$CUSTOM_FILE_SCRIPT" |
+			grep -v '^$' >> "$OUTFILE" ||:
+	fi
+
+	if [ -n "$CUSTOM_LINK_SCRIPT" ]; then
+		[ -r "$CUSTOM_LINK_SCRIPT" ] && custom_opt=f || custom_opt=e
+		find "$TOPDIR" -type l |
+			sed -e "s:$TOPDIR::" -$custom_opt "$CUSTOM_LINK_SCRIPT" |
+			grep -v '^$' >> "$OUTFILE" ||:
+	fi
+}
+
+for NAME in "$@"; do
+	if [ -n "$OUTPUT" ]; then
+		OUTFILE="$OUTPUT"
+		[ "$NAME" = "$1" ] || APPEND=1
+	else
+		OUTFILE="$NAME.lang"
+	fi
+
+	FindLang
+done

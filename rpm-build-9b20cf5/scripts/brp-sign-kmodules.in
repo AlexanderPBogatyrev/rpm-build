@@ -1,0 +1,147 @@
+#!/bin/sh -e
+#
+# brp-sign-kmodules - sign Linux kernel modules
+#
+# Copyright (C) 2020 Vitaly Chikunov <vt@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+#
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+ValidateBuildRoot
+
+cd "$RPM_BUILD_ROOT" || exit
+
+# We need modules and kernel tree to work.
+[ -d lib/modules ] || exit 0
+[ -d boot ] || exit 0
+
+# Find kernel build root.
+kbuilddir=$(find "$RPM_BUILD_DIR" -depth -maxdepth 3 -type f -name MAINTAINERS -print -quit)
+kbuilddir=${kbuilddir%/*}
+if [ -z "$kbuilddir" ]; then
+	Warning "Kernel source directory not found."
+	exit 0
+fi
+
+# Determine build time `.config'. Allow 2 levels for builds in O=subdir.
+kconfig=$(find "$kbuilddir" -depth -maxdepth 2 -type f -name .config -print -quit)
+if [ -z "$kconfig" ]; then
+	Warning "Kernel build output directory not found."
+	exit 0
+fi
+
+# Kernel output dir (from O=)
+koutput=${kconfig%/.config}
+
+# Working requirement.
+if [ ! -x "$koutput/scripts/sign-file" ]; then
+	Warning "scripts/sign-file executable not found."
+	exit 0
+fi
+
+get_config() {
+	"$kbuilddir/scripts/config" --file "$kconfig" -s "$1"
+}
+
+MODULE_SIG_ALL=$( get_config  MODULE_SIG_ALL)
+MODULE_SIG_HASH=$(get_config  MODULE_SIG_HASH)
+MODULE_SIG_KEY=$( get_config  MODULE_SIG_KEY)
+MODULE_SIG_CERT=certs/signing_key.x509
+
+# CONFIG_MODULE_SIG_ALL=y means that the modules were already signed
+# during the kernel's make modules_install.  But these modules may have
+# been debugedit(1)ed and strip(1)ped to detach the debuginfo and
+# therefore lost their signatures.
+# This brp-script is intended only for resigning such modules.
+
+if [ "$MODULE_SIG_ALL" != "y" ]; then
+	Warning "Module signing is not enabled (CONFIG_MODULE_SIG_ALL=$MODULE_SIG_ALL)"
+	exit 0
+fi
+if [ -z "$MODULE_SIG_HASH" ] || [ "$MODULE_SIG_HASH" = undef ]; then
+	Warning "Module signing hash is not set (CONFIG_MODULE_SIG_HASH)"
+	exit 0
+fi
+if [ -z "$MODULE_SIG_KEY" ] || [ "$MODULE_SIG_KEY" = undef ]; then
+	Warning "Module signing key is not set (CONFIG_MODULE_SIG_KEY)"
+	exit 0
+fi
+
+sig_key=$koutput/$MODULE_SIG_KEY
+if [ ! -f "$sig_key" ]; then
+	Warning "Signing key not found (CONFIG_MODULE_SIG_KEY=\"$MODULE_SIG_KEY\")"
+	exit 0
+fi
+
+sig_cert=$koutput/$MODULE_SIG_CERT
+if [ ! -f "$sig_cert" ]; then
+	Warning "Signing cert not found (expected $MODULE_SIG_CERT)"
+	exit 0
+fi
+
+find "$RPM_BUILD_ROOT/lib/modules" \( -name '*.ko' -or -name '*.ko.*' \) > .kmodules
+num=$(wc -l < .kmodules)
+if [ "$num" -eq 0 ]; then
+	Warning "No kernel modules found for singing."
+	exit 0
+fi
+
+# Verify that singing is working to avoid flooding with errors later.
+cd "$koutput"
+t=$(mktemp)
+if ! scripts/sign-file "$MODULE_SIG_HASH" "$MODULE_SIG_KEY" "$MODULE_SIG_CERT" "$t"; then
+	Warning "Test signing failed (scripts/sign-file error)."
+	exit 0
+fi
+rm "$t"
+cd "$RPM_BUILD_ROOT"
+
+# Determine if we should uncompress.
+read -r f < .kmodules
+rezip=
+
+ext="${f##*.}"
+case "$ext" in
+	ko) ;;
+	gz) rezip=gzip ;;
+	xz) rezip='xz --lzma2=dict=2MiB' ;;
+	zst) rezip='zstd --rm -q' ;;
+	*) Warning "$ext compression is not supported yet."; exit 0 ;;
+esac
+
+nproc="$(nproc)"
+
+if [ -n "$rezip" ]; then
+	Info "Uncompress ($rezip) $num modules before signing."
+	xargs -P"$nproc" $rezip --decompress < .kmodules
+fi
+
+cd "$koutput"
+Info "Signing $num modules in $RPM_BUILD_ROOT (hash $MODULE_SIG_HASH key $MODULE_SIG_KEY)"
+
+[ "$ext" = ko ] ||
+	sed "s/\.ko\.$ext$/.ko/" -i "$RPM_BUILD_ROOT/.kmodules"
+
+xargs -P"$nproc" -n1 <"$RPM_BUILD_ROOT/.kmodules" scripts/sign-file "$MODULE_SIG_HASH" "$MODULE_SIG_KEY" "$MODULE_SIG_CERT"
+
+cd "$RPM_BUILD_ROOT"
+
+if [ -n "$rezip" ]; then
+	Info "Compress ($rezip) $num modules after signing."
+	xargs -P"$nproc" <.kmodules $rezip
+fi
+
+rm .kmodules

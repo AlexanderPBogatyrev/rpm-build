@@ -1,0 +1,53 @@
+#!/bin/sh -eu
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+ValidateBuildRoot
+
+cd "$RPM_BUILD_ROOT"
+
+Error() {
+	echo "${0##*/}: ERROR: $*" >&2
+}
+
+# Validates user and group credentials of processes spawned by this unit.
+ValidateUnitExecUG() {
+	# We do not catch the case where a relevant directive is set to an
+	# invalid value and then overwritten with a valid value by a further
+	# drop-in file, always present when the original unit is present. It
+	# makes very little sense to do this in a package instead of patching
+	# the unit to be correct.
+	local k_regex
+	local unitf="$1"; shift
+	[ -L "$unitf" ] && return ||:
+
+	k_regex='^[[:space:]]*(User|Group)[[:space:]]*=[[:space:]]*'
+	if sed -En "s/$k_regex//p" "$unitf" | grep -Eq 'nobody|65534'; then
+		Error "\"${unitf#.}\" assumes overflowugid credentials"
+		rc=1
+	fi
+
+	k_regex='^[[:space:]]*SupplementaryGroups[[:space:]]*=[[:space:]]*'
+	# A space-separated list of names or IDs.
+	if sed -En "s/$k_regex/ /p" "$unitf" | grep -Eq ' (nobody|65534)'; then
+		Error "\"${unitf#.}\" assumes overflowgid as supplementary group"
+		rc=1
+	fi
+
+	return $rc
+}
+
+USERUNITDIR="./usr/lib/systemd/user"
+UNITDIR="./usr/lib/systemd/system"
+[ -d "$UNITDIR" ] || UNITDIR="./lib/systemd/system"
+[ -d "$UNITDIR" ] || exit 0
+
+rc=0
+echo "Verifying systemd units in $RPM_BUILD_ROOT"
+
+Verbose "Examining ${UNITDIR#.}"
+[ -d "$UNITDIR" ] && for f in $(find "$UNITDIR" -type f); do
+	ValidateUnitExecUG "$f" || rc=1
+done
+
+exit $rc

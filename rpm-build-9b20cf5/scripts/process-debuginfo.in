@@ -1,0 +1,139 @@
+#!/bin/sh -efu
+#
+# Process single file for debuginfo business.
+# (Will be run multiple instances in parallel.)
+#
+# Copyright (c) 2020 Vitaly Chikunov <vt@altlinux.org>. Based on brp-debuginfo
+# written by Alexey Tourbin <at@altlinux.org>.  Based on find-debuginfo.sh
+# by Jeff Johnson <jbj@rpm5.org> and Roland McGrath <roland@redhat.com>.
+# License: GPLv2+.
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+ValidateBuildRoot
+
+cd "$RPM_BUILD_ROOT"
+
+mkdir -p .tmp
+
+f=$1
+rezip=
+elfcompress=
+strip_rel=
+strip_btf='--keep-section=.BTF'
+strip='--strip-all'
+
+if [ -z "${f#./lib/modules/*.ko}" ]; then
+	elfcompress=yes
+	strip_rel="--reloc-debug-sections"
+elif [ -z "${f##./lib/modules/*.ko.*}" ]; then
+	ext=${f##*.}
+	unzip=
+	rezip=
+	case "$ext" in
+		gz)
+			unzip='gzip --force --decompress'
+			rezip='gzip --force'
+			;;
+		xz)
+			unzip='xz --force --decompress'
+			rezip='xz --check=crc32 --lzma2=dict=1MiB --force'
+			;;
+		zst)
+			unzip='zstd --quiet --force --rm --decompress'
+			rezip='zstd --quiet --force --rm'
+			;;
+	esac
+	# Compressed module: uncompress it, and work with uncompressed one.
+	$unzip "$f"
+	f="${f%.*}"
+	elfcompress=yes
+	strip_rel="--reloc-debug-sections"
+elif [ -z "${f##./boot/vmlinuz-*}" ]; then
+	# Compressed kernel: trigger extraction of vmlinux from the source.
+	kver=${f#./boot/vmlinuz-}
+	vmlinuxs=$(find "$RPM_BUILD_DIR" -depth -maxdepth 4 -type f -name vmlinux -print -quit)
+	vmlinuxd=./usr/lib/debug/lib/modules/$kver/vmlinux
+
+	if [ -f "$vmlinuxs" ]; then
+		install -pD -m644 "$vmlinuxs" "$vmlinuxd"
+		f=$vmlinuxd
+		strip=
+	else
+		Warning "vmlinux not found in $RPM_BUILD_DIR for -debuginfo"
+		exit
+	fi
+else
+	# Non-kernel binaries
+	strip_btf=
+fi
+
+debugf=./usr/lib/debug${f#.}.debug
+for pat in ${RPM_BRP_STRIP_DEBUG-}; do
+	if [ -z "${f##.$pat}" ]; then
+		strip='--strip-debug'
+		break
+	fi
+done
+for pat in ${RPM_BRP_STRIP_NONE-}; do
+	if [ -z "${f##.$pat}" ]; then
+		strip=
+		break
+	fi
+done
+
+timestamp=$(date --iso-8601=ns --reference="$f")
+debugedit -b "$RPM_BUILD_DIR" -d /usr/src/debug -l .tmp/src.$$ "$f"
+if [ ! -s .tmp/src.$$ ] && [ -x /usr/bin/eu-elfcompress ]; then
+	# debugedit has failed to extract sources list, possibly
+	# due to ELF compression - uncompress and try again.
+	LD_ORIGIN_PATH=/usr/bin eu-readelf -S "$f" > .tmp/sections.$$
+	if grep -q ' \.debug_info .* PROGBITS .*C' .tmp/sections.$$; then
+		# Have SHF_COMPRESSED flag.
+		zmode=zlib-gabi
+	elif grep -q ' \.zdebug_info .* PROGBITS ' .tmp/sections.$$; then
+		zmode=zlib-gnu
+	else
+		zmode=
+	fi
+	rm .tmp/sections.$$
+	if [ -n "$zmode" ]; then
+		LD_ORIGIN_PATH=/usr/bin eu-elfcompress --type=none "$f"
+		debugedit -b "$RPM_BUILD_DIR" -d /usr/src/debug -l .tmp/src.$$ "$f"
+		LD_ORIGIN_PATH=/usr/bin eu-elfcompress --type=$zmode "$f"
+	fi
+fi
+if [ -n "$strip" ]; then
+	mkdir -p "${debugf%/*}"
+	LD_ORIGIN_PATH=/usr/bin eu-strip $strip $strip_rel $strip_btf --remove-comment -f "$debugf" "$f"
+
+	if [ -n "$elfcompress" ] && [ -x /usr/bin/eu-elfcompress ]; then
+		LD_ORIGIN_PATH=/usr/bin eu-elfcompress --quiet "$debugf"
+	fi
+
+	touch --date=$timestamp "$debugf" "$f"
+	chmod 644 "$debugf"
+else
+	touch --date=$timestamp "$f"
+fi
+
+mkdir -p .debuginfo/src/"${f%/*}"
+awk 'BEGIN{RS="\0";ORS="\n"}{print}' .tmp/src.$$ |LC_ALL=C sort -u |
+while read -r src; do
+	if [ -f "$RPM_BUILD_DIR"/"$src" ]; then
+		if [ ! -f ./usr/src/debug/"$src" ]; then
+			install -pD -m644 "$RPM_BUILD_DIR"/"$src" ./usr/src/debug/"$src".$$
+			mv -f ./usr/src/debug/"$src".$$ ./usr/src/debug/"$src"
+		fi
+	elif [ -d "$RPM_BUILD_DIR"/"$src" ]; then
+		mkdir -p ./usr/src/debug/"$src"
+	else
+		continue
+	fi
+	printf '%s\n' /usr/src/debug/"$src"
+done >.debuginfo/src/"$f"
+[ -s .tmp/src.$$ ] || printf '%s\n' "$f" >> .tmp/no_debug_info
+rm .tmp/src.$$
+
+if [ -n "$rezip" ]; then
+	$rezip "$f"
+fi

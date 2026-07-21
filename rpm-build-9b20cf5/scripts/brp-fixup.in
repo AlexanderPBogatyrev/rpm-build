@@ -1,0 +1,100 @@
+#!/bin/sh -e
+#
+# brp-fixup - Misc fixups.
+#
+# Copyright (C) 2002-2020  Dmitry V. Levin <ldv@altlinux.org>
+# All rights reserved.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+ValidateBuildRoot
+
+cd "$RPM_BUILD_ROOT"
+
+SHOW_METHODS=
+AddShowMethods()
+{
+	if [ -z "$SHOW_METHODS" ]; then
+		SHOW_METHODS="$*"
+	else
+		SHOW_METHODS="$SHOW_METHODS,$*"
+	fi
+}
+
+export FIXUP_BINCONFIG=
+export FIXUP_DESKTOP=
+export FIXUP_GNUCONFIG=
+export FIXUP_LIBTOOL=
+export FIXUP_PKGCONFIG=
+for t in `printf %s "$RPM_FIXUP_METHOD" |tr , ' '`; do
+	case "$t" in
+		no|none|off|false|skip)
+			exit 0
+			;;
+		config|binconfig)
+			FIXUP_BINCONFIG=binconfig
+			AddShowMethods binconfig
+			;;
+		pkgconfig)
+			FIXUP_PKGCONFIG=pkgconfig
+			AddShowMethods pkgconfig
+			;;
+		la|libtool)
+			FIXUP_LIBTOOL=libtool
+			AddShowMethods libtool
+			;;
+		desktop)
+			FIXUP_DESKTOP=desktop
+			AddShowMethods desktop
+			;;
+		gnuconfig)
+			FIXUP_GNUCONFIG=gnuconfig
+			AddShowMethods gnuconfig
+			;;
+		*)
+			Fatal "Unrecognized fixup method: $t"
+			;;
+	esac
+done
+
+[ -n "$FIXUP_BINCONFIG$FIXUP_DESKTOP$FIXUP_GNUCONFIG$FIXUP_LIBTOOL$FIXUP_PKGCONFIG" ] || {
+	# Nothing to do
+	exit 0
+}
+
+echo "Verifying and fixing files in $RPM_BUILD_ROOT ($SHOW_METHODS)"
+
+: ${RPM_FIXUP_TOPDIR:=}
+[ -d "$RPM_BUILD_ROOT$RPM_FIXUP_TOPDIR" ] || exit 0
+
+if [ -n "$FIXUP_BINCONFIG" -a -d ./usr/bin ]; then
+	find ./usr/bin -maxdepth 1 -type f -name \*-config -print0 |
+		xargs -r0 "${RPMB_BRPOLICIES_DIR-@RPMCONFIGDIR@}"/fixup-binconfig
+fi
+
+if [ -n "$FIXUP_PKGCONFIG" ]; then
+	for d in ."$RPM_LIBDIR"/pkgconfig ./usr/share/pkgconfig; do
+		[ -d "$d" ] || continue
+		find "$d" -maxdepth 1 -type f -name \*.pc -print0 |
+			xargs -r0 "${RPMB_BRPOLICIES_DIR-@RPMCONFIGDIR@}"/fixup-pkgconfig
+	done
+fi
+
+if [ -n "$FIXUP_LIBTOOL" ]; then
+	find .$RPM_FIXUP_TOPDIR -type f -name \*.la -print0 |
+		xargs -r0 "${RPMB_BRPOLICIES_DIR-@RPMCONFIGDIR@}"/fixup-libtool
+fi
+
+if [ -n "$FIXUP_DESKTOP" ]; then
+	for d in ./usr/share/applications ./usr/share/kde/applications ./usr/share/kde4/applications; do
+		[ -d "$d" ] || continue
+		find "$d" -type f -name \*.desktop -print0 |
+			xargs -r0 "${RPMB_BRPOLICIES_DIR-@RPMCONFIGDIR@}"/fixup-desktop
+	done
+fi
+
+if [ -n "$FIXUP_GNUCONFIG" ]; then
+	find .$RPM_FIXUP_TOPDIR -type f \( -name config.guess -o -name config.sub \) -print0 |
+		xargs -r0 "${RPMB_BRPOLICIES_DIR-@RPMCONFIGDIR@}"/fixup-gnuconfig
+fi

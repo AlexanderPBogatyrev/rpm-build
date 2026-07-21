@@ -1,0 +1,70 @@
+#!/bin/sh -efu
+
+Usage()
+{
+	[ $1 = 0 ] || exec >&2
+	echo "Usage: ${0##*/} [diff-options] <directory> <diff-suffix> [patch-name]"
+	exit $1
+}
+
+diff_options=-up
+
+argv=`getopt -n "${0##*/}" -l help \
+	-o +i,E,b,w,B,a \
+	-l ignore-case,ignore-tab-expansion,ignore-space-change \
+	-l ignore-all-space,ignore-blank-lines,text -- "$@"` || Usage 2
+eval set -- "$argv"
+
+while :; do
+	case "$1" in
+		--help) Usage 0 ;;
+		--) shift; break ;;
+		-*) diff_options="$diff_options $1" ;;
+		*) echo "${0##*/}: unrecognized option $1" >&2; exit 2 ;;
+	esac
+	shift
+done
+
+if [ $# -lt 2 ]; then
+	echo "${0##*/}: not enough arguments" >&2
+	Usage 2
+fi
+if [ $# -gt 3 ]; then
+	echo "${0##*/}: too many arguments" >&2
+	Usage 2
+fi
+
+ls "$1"/ >/dev/null || Usage 2
+
+patch=
+if [ $# = 3 ]; then
+	patch="${1%/}"
+	if [ "$patch" = . ]; then
+		patch="${PWD##*/}"
+	fi
+	if [ -n "$3" ]; then
+		patch="$patch-$3"
+	fi
+	: ${SOURCEDIR:=`rpm --eval %_sourcedir`}
+	patch="$SOURCEDIR/$patch.patch"
+	: >"$patch"
+fi
+
+find "$1" -mindepth 1 \( -name "*$2" -o -name ".*$2" \) -print |
+	LC_COLLATE=C sort -u |
+	while read -r fin; do
+		fin="${fin#./}"
+		fou="${fin%$2}"
+		[ -r "$fin" ] || fin="/dev/null"
+		[ -r "$fou" ] || fou="/dev/null"
+		if [ -n "$patch" ]; then
+			diff $diff_options -- "$fin" "$fou" |tee -a "$patch"
+		else
+			diff $diff_options -- "$fin" "$fou" || [ $? = 1 ]
+		fi
+	done
+
+if [ -n "$patch" ]; then
+	echo
+	ls -l "$patch"
+fi

@@ -1,0 +1,138 @@
+#!/bin/sh -efu
+#
+# debuginfo.req - soname-based requires for *.debug files
+#
+# Written by Alexey Tourbin <at@altlinux.org>.  Based on lib.req.
+# License: GPLv2+.
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+
+dump_ld_config="${RPMB_TOOLS_DIR-@RPMCONFIGDIR@}/dump_ld_config"
+shlib_req='@RPMCONFIGDIR@/shlib.req.awk'
+elf_ldd='@RPMCONFIGDIR@/ldd'
+
+[ -n "${RPM_LIBDIR-}" ] || RPM_LIBDIR=`rpm --eval %_libdir`
+[ -n "${RPM_LIB-}" ] || RPM_LIB=`rpm --eval %_lib`
+[ -n "${RPM_ARCH-}" ] || RPM_ARCH=`rpm --eval %_arch`
+
+RPM_FINDREQ_RPATH="/$RPM_LIB $RPM_LIBDIR $("$dump_ld_config")"
+[ -z "${RPM_BUILD_ROOT-}" ] ||
+RPM_FINDREQ_RPATH="$("$dump_ld_config" '' "$RPM_BUILD_ROOT") $RPM_FINDREQ_RPATH"
+Debug "RPM_FINDREQ_RPATH=$RPM_FINDREQ_RPATH"
+
+not_yet_list=
+HasDebugInfo()
+{
+	if readelf --wide --sections "$1" |LC_ALL=C grep -F -qs '.gnu_debuglink'; then
+		return 0
+	fi
+	if [ -z "$not_yet_list" ] || [ -n "${not_yet_list##* $1 *}" ]; then
+		Warning "$1 is not yet debuginfo-enabled"
+		not_yet_list="$not_yet_list $1 "
+	fi
+	return 1
+}
+
+DebugInfoReq()
+{
+	local debugf="$1"
+	local f="${debugf#${RPM_BUILD_ROOT-}/usr/lib/debug}"
+	f="${RPM_BUILD_ROOT-}${f%.debug}"
+	local fname="${f#${RPM_BUILD_ROOT-}}"
+
+	[ -n "${f#*/lib/modules/*/vmlinux}" ] || return 0
+
+	# Obtain objdump info.
+	local dump
+	if ! dump=$(objdump -p "$f"); then
+		Warning "$f: objdump failed"
+		return 0
+	fi
+
+	# Obtain ELF segments.
+	local segments
+	if ! segments=$(readelf --wide --segments "$f"); then
+		Warning "$f: readelf failed"
+		return 0
+	fi
+
+	# Interp.
+	local interp
+	interp="$(printf '%s\n' "$segments" |
+		  sed -ne 's,^[[:space:]]*\[Requesting program interpreter: \(/[^]]\+\)\]$,\1,p')"
+	if [ -n "$interp" ]; then
+		if [ -n "${RPM_BUILD_ROOT-}" ] && [ -x "$RPM_BUILD_ROOT$interp" ] || HasDebugInfo "$interp"; then
+			printf '/usr/lib/debug%s.debug\n' "$interp"
+		fi
+	fi
+
+	# That could be "statically linked (uses shared libs)".
+	printf '%s\n' "$dump" |grep -qs '^Dynamic Section:$' || return 0
+
+	# The rest is soname stuff.
+	local debug canon_prefix deps dir name pathname prefix rpath suffix vers
+	suffix="$(printf '%s\n' "$dump" |sed -ne 's/^.*file format \(elf64\).*$/(64bit)/p')"
+	[ -z "$suffix" ] && debug=debug || debug=debug64
+
+	rpath="$(printf %s "$dump" |
+		 awk '($1=="RPATH"||$1=="RUNPATH"){print $2}' |
+		 tr -s : ' ' |
+		 sed -e "s|\$ORIGIN|${fname%/*}|g")"
+	if [ -n "$rpath" ]; then
+		rpath="$rpath $RPM_FINDREQ_RPATH"
+	else
+		rpath="$RPM_FINDREQ_RPATH"
+	fi
+	rpath="$(printf %s "$rpath" |
+		tr -s '[:space:]' '\n' |
+		grep -v '^$' |
+		LANG=C uniq |
+		sed -e "s|^|${RPM_BUILD_ROOT-}&|" |
+		tr -s '[:space:]' : |
+		sed -e 's/^:\+//; s/:\+$//')"
+	deps="$("$elf_ldd" -- "$f" "$rpath")" || return 1
+
+	for vers in `printf '%s\n' "$dump" |"$shlib_req"`; do
+		name="$(printf %s "$vers" |cut -d: -f1)"
+		vers="$(printf %s "$vers" |cut -d: -f2-)"
+		pathname="$(printf %s "$deps" |awk "-vname=$name" '
+function basename(f) { sub("^.*/","",f); return f; }
+NF>=3 && ($1==name || basename($1)==name) && $2=="=>" && $3~"^/" {print $3}
+NF==2 && ($1==name || basename($1)==name) && $1~"^/" && $2~"^[(]0x" {print $1}
+			')"
+		if [ -z "$pathname" ]; then
+			Warning "$fname: library $name not found"
+			continue
+		fi
+		pathname=$(CanonPath "$pathname")
+		Verbose "$fname: $name -> $pathname"
+		local under_buildroot=
+		if [ -n "${RPM_BUILD_ROOT-}" ] && [ -z "${pathname##$RPM_BUILD_ROOT*}" ]; then
+			pathname=${pathname#$RPM_BUILD_ROOT}
+			under_buildroot=1
+		fi
+		prefix="${pathname%/*}"
+		canon_prefix="$(printf %s "$prefix/" |
+			sed -e 's|/tls/|/|' -e 's|/sse2/|/|' -e "s|/$RPM_ARCH/|/|" -e 's|/i[3-9]86/|/|' -e 's|/\+$||')"
+		if [ -z "$canon_prefix" -o -n "${canon_prefix##/*}" ]; then
+			Warning "$fname: library $name not found"
+			continue
+		fi
+		for dir in $RPM_FINDREQ_RPATH; do
+			if [ "$canon_prefix" = "$dir" ]; then
+				prefix=
+				break
+			fi
+		done
+		if [ -n "$under_buildroot" ] || HasDebugInfo "$pathname"; then
+			if [ -z "$prefix" ]; then
+				printf '%s(%s)\n' "$debug" "$name"
+			else
+				printf '/usr/lib/debug%s/%s.debug\n' "$prefix" "${name##*/}"
+			fi
+		fi
+	done
+}
+
+ArgvFileAction DebugInfoReq "$@"

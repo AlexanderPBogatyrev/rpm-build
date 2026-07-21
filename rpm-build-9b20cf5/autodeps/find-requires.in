@@ -1,0 +1,168 @@
+#!/bin/sh -efu
+#
+# Copyright (C) 2000-2007,2011  Dmitry V. Levin <ldv@altlinux.org>
+# Copyright (C) 2007       Alexey Tourbin <at@altlinux.org>
+# Copyright (C) 2016       Ivan Zakharyaschev <imz@altlinux.org>
+#
+# find-requires - generate list of linux-specific package requires.
+# Inspired by tool with same name from RPM distribution.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+#
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+ValidateBuildRoot
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/tmpdir.sh
+
+methods=$(SetupMethods req "$RPM_FINDREQ_METHOD")
+if [ -z "$methods" ]; then
+	Info 'AutoReq disabled, nothing to do'
+	cat > /dev/null
+	exit 0
+fi
+
+# We must be careful not use any symlink not from the known files.
+# Therefore, we cannot use readlink -f or any other standard
+# symlink-following tools
+# (because they might read symlinks belonging to other packages).
+canonicalize_relative_link()
+{
+    local fname="$1"
+    local to="$2"
+    realpath --no-symlinks --canonicalize-missing --logical "$(dirname "$fname")"/"$to"
+}
+# (TODO: we don't pay any attention to directory symlinks
+# that might appear as components of some files' paths.
+# When can this be important?
+# Example: a/c -> b/c, b -> d, d/c has type t.
+# If done more correctly, a/c should get type t.
+# But our resolution can't substitute d for b now.
+# The problem why we don't use realpath for this is that
+# whereas d/c could belong to our package, b might not to do so,
+# and the our package can't guarantee that a/c is always the same as d/c.)
+
+# filter file list through TOPDIR and SKIPLIST patterns
+while IFS= read -r f; do
+	fname="${f#$RPM_BUILD_ROOT}"
+	printf '%s\n' "$fname" >&3
+	if [ -n "${RPM_FINDREQ_TOPDIR-}" ] && [ -z "${fname%%$RPM_FINDREQ_TOPDIR/*}" ]; then
+		Debug "skip $f due to RPM_FINDREQ_TOPDIR=$RPM_FINDREQ_TOPDIR"
+		continue
+	fi
+	if [ -n "${RPM_FINDREQ_SKIPLIST-}" ]; then
+		for skip in $RPM_FINDREQ_SKIPLIST; do
+			if [ -z "${fname##$skip}" ]; then
+				Debug "skip $f due to RPM_FINDREQ_SKIPLIST pattern $skip"
+				continue 2
+			fi
+		done
+	fi
+	# almost no symbolic links should be passed directly to file(1)
+	if [ -L "$f" ]; then
+		to="$(readlink "$f")"
+		# absolute symbolic links should not be passed down to file(1)
+		# (because of buildreq)
+		if [ -n "$to" -a -z "${to##/*}" ]; then
+			if [ -e "$f" ]; then
+				printf '%s\t symbolic link to `%s'\''\n' "$f" "$to"
+			else
+				printf '%s\t broken symbolic link to `%s'\''\n' "$f" "$to"
+			fi
+		else
+		# relative symbolic links should be followed within this package
+		# (they represent fixed content inside the package
+		# which should be analysed instead);
+		# only the unresolved "remainder" will be passed
+		    printf '%s\t%s\n' "$f" "$(canonicalize_relative_link "$f" "$to")" >&5
+		fi >&4
+		continue
+	fi
+	printf '%s\n' "$f"
+done >"$tmpdir"/files \
+    3>"$RPM_BUILD_ROOT/.files:$RPM_SUBPACKAGE_NAME" \
+    4>"$tmpdir"/files+types \
+    5>"$tmpdir"/symlinks+targets-unsorted
+
+# filter file list through file(1) to append types
+if ! file4 -NF$'\t' -f "$tmpdir"/files >>"$tmpdir"/files+types; then
+	sed -n '/\t *ERROR:/p' "$tmpdir"/files+types >&2
+	exit 1
+fi
+
+# resolve symlinks inside the package
+sort -t$'\t' -k2 <"$tmpdir"/symlinks+targets-unsorted >"$tmpdir"/symlinks+targets
+JFS=$'\t' "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/percolate "$tmpdir"/files+types "$tmpdir"/symlinks+targets
+# append the remainder
+if ! cut -f1 < "$tmpdir"/symlinks+targets |
+    file4 -NF$'\t' -f- >>"$tmpdir"/files+types
+then
+	sed -n '/\t *ERROR:/p' "$tmpdir"/files+types >&2
+	exit 1
+fi
+
+found=
+RunMethod()
+{
+	local exe="$1"; shift
+	local filter="$exe".files
+	if ! [ -x "$filter" ]; then
+		# XXX should be Fatal
+		Info "$filter not available"
+		return
+	fi
+	local filelist="$tmpdir/${exe##*/}".files
+	local deplist="$tmpdir/${exe##*/}".deps
+	Debug "running $filter"
+	"$filter" <"$tmpdir"/files+types >"$filelist" ||
+		Fatal "$filter failed"
+	Verbose "$filter: $(wc -l <"$filelist") files"
+	[ -s "$filelist" ] || return 0
+	# XXX validate $filelist
+	Debug "running $exe"
+	"$exe" <"$filelist" >"$deplist" ||
+		Fatal "$exe failed"
+	if [ -s "$deplist" ]; then
+		LC_COLLATE=C sort -u -o "$deplist" "$deplist"
+		Verbose "$exe: $(wc -l <"$deplist") dependencies"
+		found=1
+	else
+		rm -f "$deplist"
+	fi
+}
+
+export RPM_FINDPACKAGE_COMMANDS_LOG="$RPM_BUILD_ROOT"/.findpackage-commands
+>"$RPM_FINDPACKAGE_COMMANDS_LOG"
+
+Info "running scripts ($methods)"
+RunMethods req "$methods" RunMethod
+
+if [ -n "$found" ]; then
+	(set +f && LC_ALL=C sort -u -m "$tmpdir"/*.deps) >"$tmpdir"/find-requires-deps || false
+	if [ -n "${RPM_FIND_REQUIRES_FILTER-}" ]; then
+		(eval "set -x; $RPM_FIND_REQUIRES_FILTER") <"$tmpdir"/find-requires-deps >"$tmpdir"/filter-requires-deps
+		[ $? = 0 ] || Fatal "filter failed"
+		(cd "$tmpdir" && diff -U1 find-requires-deps filter-requires-deps) >&2 ||:
+		cat "$tmpdir"/filter-requires-deps
+	else
+		cat "$tmpdir"/find-requires-deps
+	fi
+fi
+
+if [ -s "$RPM_FINDPACKAGE_COMMANDS_LOG" ]; then
+	LC_ALL=C sort -u -o "$RPM_FINDPACKAGE_COMMANDS_LOG"{,}
+	Info "FINDPACKAGE-COMMANDS:" $(cat <"$RPM_FINDPACKAGE_COMMANDS_LOG")
+fi

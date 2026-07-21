@@ -1,0 +1,4 @@
+#!/bin/sh -efu
+dirlist=$(set +f; grep -h ^/. @RPMCONFIGDIR@/*-files.req.list |
+	while read -r d pkg; do echo "${d%/}"; done)
+cut -f1 |grep -F "${dirlist:?}" || [ $? = 1 ]

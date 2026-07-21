@@ -1,0 +1,14 @@
+#!/bin/sh -efu
+while IFS=$'\t' read -r f t; do
+	case "$f" in
+		${RPM_BUILD_ROOT-}/lib/systemd/system/*) ;;
+		${RPM_BUILD_ROOT-}/usr/lib/systemd/system/*) ;;
+		${RPM_BUILD_ROOT-}/usr/lib/systemd/user/*) ;;
+		*) continue ;;
+	esac
+	case "$t" in
+		*'symbolic link to '*) ;;
+		*' directory') ;;
+		*) echo "$f" ;;
+	esac
+done

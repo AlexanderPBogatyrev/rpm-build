@@ -1,0 +1,9 @@
+#!/bin/sh -efu
+while IFS=$'\t' read -r f t; do
+	case " $t" in
+		*' ELF '*' shared object, no machine, '*)
+			continue ;;
+		*' ELF '*' shared object, '*)
+			echo "$f" ;;
+	esac
+done

@@ -1,0 +1,8 @@
+#!/bin/sh -efu
+
+if [ "${RPM_INSTALL_STRIP-}" = ignore ]; then
+	echo >&2 "WARNING: strip is called in %install by 'install -s' (ignored)"
+else
+	set -- `rpm --eval %__strip` "$@"
+	exec "$@"
+fi

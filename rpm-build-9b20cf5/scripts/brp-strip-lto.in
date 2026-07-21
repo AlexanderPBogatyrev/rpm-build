@@ -1,0 +1,58 @@
+#!/bin/sh -efu
+#
+# brp-strip-lto - Strip LTO sections and symbols from object files
+#
+# LTO bytecode needs to be stripped for distributions, because it's
+# GCC version dependent:
+#   "The bytecode files are versioned and there is a strict version
+#   check, so bytecode files generated in one version of GCC do not
+#   work with an older or newer version of GCC." -- gcc(1).
+#
+# Based on brp-strip-lto (Fedora) and brp-debuginfo.
+# Copyright (c) 2021 Vitaly Chikunov <vt@altlinux.org>.
+# License: GPLv2+.
+
+# Implementation notes:
+# - xargs -Px -nx to start parallelizing sooner.
+# - %brp_strip_none is respected.
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+ValidateBuildRoot
+
+cd "$RPM_BUILD_ROOT"
+mkdir -p .tmp
+rc=0
+
+# They skip /usr/lib/debug from the search, but why. There aren't
+# such objects nor meaning to skip stripping them.
+# Only skip internal temporary workspace.
+find -path './.*' -prune -o -name '*.[ao]' -type f -print | \
+while read -r f; do
+	for pat in ${RPM_BRP_STRIP_NONE-}; do
+		if [ -z "${f##.$pat}" ]; then
+			f=
+			continue
+		fi
+	done
+	[ -n "$f" ] && printf "%s\0" "$f"
+done | \
+eu-elfclassify --not-program --not-library --not-linux-kernel-module --stdin0 --print0 | \
+xargs -0 -r -P$(nproc) -n$(nproc) "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/process-lto || rc=$?
+
+if [ -e .tmp/lto-suggest ]; then
+	single='this file contains'
+	plural='these files contain'
+	[ "$(wc -c < .tmp/lto-suggest)" = 1 ] &&
+		phrase="$single" ||
+		phrase="$plural"
+	sed "s/^/${0##*/}: /" >&2 <<EOF
+Most likely $phrase GIMPLE bytecode that should NOT be packaged
+since its format can change between GCC versions.
+Use -ffat-lto-objects option to package machine code in static libraries, e.g.
+%{?optflags_lto:%global optflags_lto %optflags_lto -ffat-lto-objects}
+Alternatively, you might want to stop packaging static libraries
+or disable link-time optimization for this package.
+EOF
+fi
+
+exit $rc

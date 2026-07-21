@@ -1,0 +1,21 @@
+#!/bin/sh -efu
+while IFS=$'\t' read -r f t; do
+	case "$t" in
+		#!/bin/sh
+		*'Bourne shell script text'*)
+			echo "$f" ;;
+		#!/bin/bash
+		*'Bourne-Again shell script text'*)
+			echo "$f" ;;
+		#!/usr/bin/env sh
+		*' sh script text'*)
+			echo "$f" ;;
+		#!/usr/bin/env bash
+		*' bash script text'*)
+			echo "$f" ;;
+		#!/bin/ash
+		*' /bin/ash script text'* |\
+		*' /bin/ash '*' script text'* )
+			echo "$f" ;;
+	esac
+done

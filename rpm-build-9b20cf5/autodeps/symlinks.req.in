@@ -1,0 +1,30 @@
+#!/bin/sh -efu
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-find-package
+
+SymlinkReq()
+{
+	local f="$1" to; shift
+	[ -L "$f" ] || return 0
+	to=$(readlink -v "$f")
+	[ -n "$to" ] || Fatal "$f: cannot happen"
+	if [ -z "${to##/*}" ]; then
+		# Link target is absolute path.
+		# Just let FindPackage do the rest of the work.
+		FindPackage "$f" "$to"
+	else
+		# Link target is relative.  Do one single step of symlink resolution,
+		# that is, catenate symlink parent directory and its target.
+		# E.g.  $RPM_BUILD_ROOT/usr/share/foo/rt.jar -> ../java/rt.jar
+		# goes 	$RPM_BUILD_ROOT/usr/share/foo/../java/rt.jar
+		to=$(dirname "$f")/$to
+		# As we strip $RPM_BUILD_ROOT, we get possibly non-canonical
+		# required path, which is yet okay for FindPackage.
+		to=${to#${RPM_BUILD_ROOT-}}
+		FindPackage "$f" "$to"
+	fi
+}
+
+ArgvFileAction SymlinkReq "$@"

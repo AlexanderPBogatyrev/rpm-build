@@ -1,0 +1,106 @@
+#!/bin/sh -efu
+#
+# Copyright (C) 2007  Alexey Tourbin <at@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-find-package
+
+[ -n "${RPM_LIBDIR-}" ] || RPM_LIBDIR=`rpm --eval %_libdir`
+PKG_CONFIG_PATH=$RPM_LIBDIR/pkgconfig:/usr/share/pkgconfig
+[ -z "${RPM_BUILD_ROOT-}" ] ||
+PKG_CONFIG_PATH=$RPM_BUILD_ROOT$RPM_LIBDIR/pkgconfig:$RPM_BUILD_ROOT/usr/share/pkgconfig:$PKG_CONFIG_PATH
+export PKG_CONFIG_PATH
+
+gcc= gcc_libdirs=
+PkgconfigLibReq()
+{
+	local f="$1"; shift
+
+	local srpm="${RPM_PACKAGE_NAME-}"
+	[ -n "$srpm" ] || srpm=$(rpmquery --qf='%{SOURCERPM}' -f "$f" 2>/dev/null) || srpm=foo
+	case "$srpm" in
+		# Below we use "gcc -print-search-dirs" to determine library
+		# search path.  If we build gcc itself, then e.g. libgcj.pc
+		# (with -lgcj inside) cannot be processed reliably.
+		gcc | gcc-[1-9]* | gcc[1-9]* )
+			Verbose "$f: $PROG disabled for gcc"
+			return 0 ;;
+	esac
+
+	local libs
+	libs=$(pkg-config --disable-recursion --print-errors --libs-only-l "$f") || Fatal "failed to process $f"
+	libs=$(echo '' $libs |sed -e 's/ -l/ /g' -e 's/^ //')
+	[ -n "$libs" ] || return 0
+	Debug "$f: libs=$libs"
+
+	local libdirs
+	libdirs=$(pkg-config --disable-recursion --print-errors --libs-only-L "$f") || Fatal "failed to process $f"
+	libdirs=$(echo '' $libdirs |sed -e 's/ -L/ /g' -e 's/^ //')
+	[ -z "$libdirs" ] || Debug "$f: libdirs=$libdirs"
+
+	if [ -z "$gcc" ]; then
+		gcc=/usr/bin/${RPM_ARCH:-noarch}-alt-linux-gcc
+		[ -x "$gcc" ] || gcc=/usr/bin/gcc
+		[ -z "${GCC_VERSION-}" ] || gcc=$gcc-$GCC_VERSION
+		Debug "gcc=$gcc"
+		gcc_libdirs=$("$gcc" -print-search-dirs |sed -n 's/^libraries: =//p')
+		[ -n "$gcc_libdirs" ] || Fatal "$gcc -print-search-dirs failed"
+		gcc_libdirs=$(IFS="$IFS:"
+			for dir in $gcc_libdirs; do
+				[ -d "$dir" ] || continue
+				readlink -ve "$dir"
+			done)
+		gcc_libdirs=$(printf '%s\n' "$gcc_libdirs" |cat -n |sort -u -k2 |sort -n |cut -f2-)
+		Debug "gcc_libdirs=$(echo $gcc_libdirs)"
+	fi
+
+	# FindPackage should use host-system package names.
+	local RPM_FINDPACKAGE_HOST_PKG_NAMES=1
+
+	local lib libdir
+	for lib in $libs; do
+		local rep
+		if [ -n "${RPM_BUILD_ROOT-}" ]; then
+			for libdir in $libdirs $gcc_libdirs; do
+				rep=$libdir/lib$lib
+				# Allow absolute symbolic links.
+				if [ -f "$RPM_BUILD_ROOT$rep.so" -o -L "$RPM_BUILD_ROOT$rep.so" ]; then
+					rep=$rep.so
+				elif [ -f "$RPM_BUILD_ROOT$rep.a" -o -L "$RPM_BUILD_ROOT$rep.a" ]; then
+					rep=$rep.a
+				else
+					continue
+				fi
+				# The library is under RPM_BUILD_ROOT.
+				# FindPackage will emit file-level dependency.
+				Verbose "$f: -l$lib -> \$RPM_BUILD_ROOT$rep"
+				FindPackage "$f" "$rep"
+				# Do next lib.
+				continue 2
+			done
+		fi
+		for libdir in $libdirs $gcc_libdirs; do
+			rep=$libdir/lib$lib
+			if [ -f "$rep.so" ]; then
+				rep=$rep.so
+			elif [ -f "$rep.a" ]; then
+				rep=$rep.a
+			else
+				continue
+			fi
+			# The library is found in the host system.
+			Verbose "$f: -l$lib -> $rep ..."
+			FindPackage "$f" "$rep"
+			continue 2
+		done
+		Warning "$f: cannot find -l$lib library path (skip)"
+	done
+}
+
+ArgvFileAction PkgconfigLibReq "$@"

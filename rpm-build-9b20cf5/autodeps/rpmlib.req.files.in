@@ -1,0 +1,15 @@
+#!/bin/sh -efu
+
+# Actually we can use "AutoReq: yes, norpmlib" in rpm.spec.
+if [ "${RPM_PACKAGE_NAME-}" = rpm ]; then
+	echo "${0##*/}: rpmlib.req disabled for rpm itself" >&2
+	exit 0
+fi
+
+while IFS=$'\t' read -r f t; do
+	case "$f" in
+		${RPM_BUILD_ROOT-}@RPMCONFIGDIR@/*.filetrigger) ;;
+		*) continue ;;
+	esac
+	echo "$f"
+done

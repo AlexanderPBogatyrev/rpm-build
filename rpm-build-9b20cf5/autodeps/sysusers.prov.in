@@ -1,0 +1,10 @@
+#!/bin/sh -efu
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+[ $# -eq 1 ] && [ -n "$1" -a -z "${1##/*}" ] ||
+	{ ArgvFileAction "$0" "$@"; exit; }
+
+file="$1"
+
+"${RPMB_TOOLS_DIR-@RPMCONFIGDIR@}/mksysusers" --prov < "$file"

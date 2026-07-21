@@ -1,0 +1,19 @@
+#!/bin/sh -efu
+#
+# fixup-gnu-config - turn config.guess and config.sub files into symlinks.
+#
+# Copyright (C) 2020  Dmitry V. Levin <ldv@altlinux.org>
+# All rights reserved.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+for f; do
+	[ ! -L "$f" ] && [ -f "$f" ] ||
+		continue
+	case "$f" in
+		*/gnu-config/*) continue ;;
+		*/config.guess | */config.sub) ;;
+		*) continue ;;
+	esac
+	ln -rsnfv ${RPM_BUILD_ROOT-}/usr/share/gnu-config/${f##*/} "$f"
+done

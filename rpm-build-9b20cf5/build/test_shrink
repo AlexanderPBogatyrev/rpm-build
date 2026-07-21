@@ -1,0 +1,31 @@
+#!/bin/bash
+# shellcheck disable=SC2120
+
+cd "$(dirname "$0")" || exit 1
+source ./test-functions.sh
+
+topic="%dnl"
+pass <<-EOF
+	%shrink exit 0
+	exit 1
+EOF
+pass <<-EOF
+	%{shrink:exit 0}
+	exit 1
+EOF
+# shrink v2 would exit 0
+xfail <<-EOF
+	%{shrink exit 1}
+	exit 1
+EOF
+pass re='\nh e l lo\n' <<-EOF
+	echo "%{shrink: h e  l 
+		lo	}"
+EOF
+pass re='\n%%\n' <<-EOF
+	echo %shrink %%%%
+EOF
+# shrink v2 would output '%%'
+pass re='\n%\n' <<-EOF
+	echo %{shrink:%%%%}
+EOF

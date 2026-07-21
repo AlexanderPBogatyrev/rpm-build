@@ -1,0 +1,77 @@
+#!/bin/bash
+# shellcheck disable=SC2120
+
+cd "$(dirname "$0")" || exit 1
+source ./test-functions.sh
+
+cb_query() {
+	re_output="$t/query"
+	rpm -q --qf '%{DESCRIPTION}' -p "$t/RPM/SRPMS/test-0-0.src.rpm" > "$re_output"
+}
+
+check() {
+	local "$@"
+	cat <<-EOF >"$t/test.spec"
+		Name: test
+		Version: 0
+		Release: 0
+		Summary: Test
+		Group: Other
+		License: CC0
+		%description
+	EOF
+	cat >>"$t/test.spec"
+	run \
+		args="-bs" \
+		spec="$t/test.spec" \
+		callback=cb_query \
+		"$@"
+}
+
+topic="description"
+check re='^Test$' msg='Simple macro expansion' <<EOF
+%summary
+EOF
+
+check re='^A\nC$' msg='Conditionals' <<EOF
+%if 1
+A
+%else
+B
+%endif
+C
+EOF
+
+check re='^A\nB$' msg='Commentaries' <<EOF
+# commentary
+A
+# commentary
+B
+# commentary
+EOF
+
+check re='^A\nB\nC\nD$' msg='Trailing spaces' <<EOF
+A
+B 
+C  
+D   
+EOF
+
+check re='^A$' msg='Blank heading line' <<EOF
+
+A
+EOF
+
+check re='^A\n\nB$' msg='Multiple consequential blank lines' <<EOF
+A
+
+
+B
+EOF
+
+check re='^A$' msg='Trailing blank lines' <<EOF
+A
+
+
+%changelog
+EOF

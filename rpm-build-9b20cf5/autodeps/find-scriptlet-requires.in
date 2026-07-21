@@ -1,0 +1,39 @@
+#!/bin/sh -efu
+#
+# Copyright (C) 2008  Alexey Tourbin <at@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+
+script="$1"
+
+RunMethod()
+{
+	local exe="$1"; shift
+	local filter="$exe".files
+	[ -x "$filter" ] || return 0
+	local file_and_type
+	file_and_type=$(file4 -L -NF$'\t' "$script")
+	local filtered
+	filtered=$(printf '%s\n' "$file_and_type" |"$filter") ||
+		Fatal "$filter failed"
+	[ -n "$filtered" ] || return 0
+	printf '%s\n' "$script" |"$exe" ||
+		Fatal "$exe failed"
+}
+
+export RPM_FINDPACKAGE_COMMANDS_LOG="$RPM_BUILD_ROOT"/.findpackage-commands
+>"$RPM_FINDPACKAGE_COMMANDS_LOG"
+
+methods=$(SetupMethods req all)
+RunMethods req "$methods" RunMethod
+
+if [ -s "$RPM_FINDPACKAGE_COMMANDS_LOG" ]; then
+	LC_ALL=C sort -u -o "$RPM_FINDPACKAGE_COMMANDS_LOG"{,}
+	Info "FINDPACKAGE-COMMANDS:" $(cat <"$RPM_FINDPACKAGE_COMMANDS_LOG")
+fi

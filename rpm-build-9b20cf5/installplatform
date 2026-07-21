@@ -1,0 +1,204 @@
+#!/bin/sh -efu
+
+DESTDIR="${DESTDIR:-/}"
+pkglibdir="${pkglibdir:-/usr/lib/rpm}"
+
+RPMRC="${1:-rpmrc}"
+MACROS="${2:-macros}"
+PLATFORM="${3:-platform}"
+
+if grep /share/ $PLATFORM > /dev/null 2>&1 ; then
+    DEFAULTDOCDIR='%{_usr}/share/doc'
+else
+    DEFAULTDOCDIR='%{_usr}/doc'
+fi
+
+#TEMPRC="/tmp/rpmrc.$$"
+#cat << E_O_F > $TEMPRC
+#include:	$RPMRC
+#macrofiles:	$MACROS
+#E_O_F
+#
+#RPM="./rpm --rcfile $TEMPRC"
+RPM=rpm
+
+arch="`$RPM --eval '%{_target_cpu}'`"
+VENDOR="`$RPM --eval '%{_vendor}'`"
+OS="`$RPM --eval '%{_os}'`"
+RPMRC_GNU="`$RPM --eval '%{_gnu}'`"
+target_platform="`$RPM --eval '%{?_gnu:%undefine _gnu}%{_target_platform}'`"
+target="`$RPM --eval '%{_target}'`"
+
+case "$arch" in
+  i[3456]86|k6|athlon|athlon_xp|pentium[234])
+    SUBSTS='s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),i386, s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),i486, s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),i586, s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),i686, s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),k6, s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),athlon, s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),athlon_xp, s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),pentium2, s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),pentium3, s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),pentium4, s,\(i[3456]86\|k6\|athlon_xp\|athlon\|pentium[234]\),noarch,'
+    ;;
+  aarch64)
+    SUBSTS='s,aarch64,aarch64, s,aarch64,noarch,'
+    ;;
+  alpha*)
+    SUBSTS='s,alpha,alpha, s,alpha,alphaev5, s,alpha,alphaev56, s,alpha,alphapca56, s,alpha,alphaev6, s,alpha,alphaev67,'
+    ;;
+  armv8*|armv7*)
+    SUBSTS='s,arm.*,armh, s,arm.*,armv7l, s,arm.*,armv8l, s,arm.*,noarch,'
+    ;;
+  arm*)
+    SUBSTS='s,arm.*,arm, s,arm.*,armv3l, s,arm.*,armv4l, s,arm.*,armv5l, s,arm.*,armv5tel, s,arm.*,armv5tejl, s,arm.*,armv6l, s,arm.*,noarch,'
+    ;;
+  e2k*)
+    SUBSTS='s,e2k.*,e2k, s,e2k.*,e2kv4, s,e2k.*,e2kv5, s,e2k.*,e2kv6, s,e2k.*,noarch,'
+    ;;
+  mips)
+    SUBSTS='s,mips,mips, s,mips,noarch,'
+    ;;
+  mipsel)
+    SUBSTS='s,mipsel,mipsel, s,mipsel,noarch,'
+    ;;
+  mipsn32)
+    SUBSTS='s,mipsn32,mipsn32, s,mipsn32,noarch,'
+    ;;
+  mipsn32el)
+    SUBSTS='s,mipsn32el,mipsn32el, s,mipsn32el,noarch,'
+    ;;
+  mips64)
+    SUBSTS='s,mips64,mips64, s,mips64,noarch,'
+    ;;
+  mips64el)
+    SUBSTS='s,mips64el,mips64el, s,mips64el,noarch,'
+    ;;
+  s390x)
+    SUBSTS='s,s390x,s390x, s,s390x,noarch,'
+    ;;
+  sparc*)
+    SUBSTS='s,sparc\(64\|v9\),sparc, s,sparc64,sparcv9,;s,sparc\([^v]\|$\),sparcv9\1, s,sparcv9,sparc64,;s,sparc\([^6]\|$\),sparc64\1,'
+    ;;
+  ppc64le)
+    SUBSTS='s,ppc64le,ppc64le, s,ppc64le,noarch,'
+    ;;
+  powerpc*|ppc*)
+    SUBSTS='s,ppc64,ppc, s,ppc\([^6]\|$\),ppc64\1,'
+    ;;
+  riscv64)
+    SUBSTS='s,riscv64,riscv64, s,riscv64,noarch,'
+    ;;
+  x86_64)
+    SUBSTS='s,x86_64,x86_64, s,x86_64,noarch,'
+    ;;
+  *)
+    SUBSTS='y___'
+    ;;
+esac
+
+for SUBST in $SUBSTS ; do
+  ARCH=`echo $arch | sed -e $SUBST`
+  LIBSUFF=
+  POINTER_SIZE=32
+
+  PPD="${DESTDIR}/${pkglibdir}/${ARCH}-${VENDOR}-${OS}"
+
+  [ -d $PPD ] || mkdir $PPD
+
+  RPMRC_OPTFLAGS="`sed -n 's/^optflags: '$ARCH' //p' $RPMRC`"
+  RPMRC_OPTFLAGS="`echo $RPMRC_OPTFLAGS | sed -e 's, ,\ ,g'`"
+
+  ARCH_INSTALL_POST='%{nil}'
+  case "${ARCH}-${OS}" in
+    aarch64-linux)
+	    LIBSUFF=64
+	    POINTER_SIZE=64
+	    ;;
+    mipsn32-linux*)
+	    LIBSUFF=32
+	    ;;
+    mipsn32el-linux*)
+	    LIBSUFF=32
+	    ;;
+    mips64-linux*)
+	    LIBSUFF=64
+	    POINTER_SIZE=64
+	    ;;
+    mips64el-linux*)
+	    LIBSUFF=64
+	    POINTER_SIZE=64
+	    ;;
+    ppc64le-linux*)
+	    LIBSUFF=64
+	    POINTER_SIZE=64
+	    ;;
+    riscv64-linux)
+	    LIBSUFF=64
+	    POINTER_SIZE=64
+	    ;;
+    loongarch64-linux)
+	    LIBSUFF=64
+	    POINTER_SIZE=64
+	    ;;
+    s390x-linux)
+	    LIBSUFF=64
+	    POINTER_SIZE=64
+	    ;;
+    sparc64-linux)
+	    LIBSUFF=64
+	    POINTER_SIZE=64
+	    ;;
+    x86_64-linux)
+	    LIBSUFF=64
+	    POINTER_SIZE=64
+	    ;;
+    e2k*-linux)
+	    LIBSUFF=64
+	    POINTER_SIZE=64
+	    ;;
+    noarch-linux)
+	    POINTER_SIZE=
+  esac
+
+  VENDORSED=
+  case $VENDOR in
+  alt)
+    VENDORSED='-e s,^@alt@,,'
+    ;;
+  pld)
+    VENDORSED='-e s,^@pld@,,'
+    ;;
+  mandrake)
+    VENDORSED='-e s,^@mandrake@,,'
+    RPMRC_OPTFLAGS="`echo $RPMRC_OPTFLAGS | sed -e s/i386/i686/`"
+    ;;
+  conectiva)
+    VENDORSED='-e s,^@conectiva@,,'
+    ;;
+  redhat)
+    VENDORSED='-e s,^@redhat@,,'
+    ;;
+  esac
+
+  LIBSUFF_EXISTS=@
+  [ "$LIBSUFF" = '' ] || LIBSUFF_EXISTS=
+
+  ARCH_ILP32=
+  ARCH_LP64=
+  case "$POINTER_SIZE" in
+	32) ARCH_ILP32=1 ;;
+	64) ARCH_LP64=1 ;;
+  esac
+
+  cat $PLATFORM \
+  | sed -e "s,@RPMRC_OPTFLAGS@,$RPMRC_OPTFLAGS," \
+	-e "s,@RPMRC_ARCH@,$ARCH," \
+	-e "s,@RPMRC_GNU@,$RPMRC_GNU," \
+	-e "s,@LIBSUFF_DEFINITION@,${LIBSUFF:-%nil}," \
+	-e "s,@LIBSUFF@,$LIBSUFF," \
+	-e "s,@LIBSUFF_EXISTS@,$LIBSUFF_EXISTS," \
+	-e "s,@POINTER_SIZE@,$POINTER_SIZE," \
+	-e "s,@ARCH_ILP32@,$ARCH_ILP32," \
+	-e "s,@ARCH_LP64@,$ARCH_LP64," \
+	-e "s,@ARCH_INSTALL_POST@,$ARCH_INSTALL_POST," \
+	-e "s,@DEFAULTDOCDIR@,$DEFAULTDOCDIR," \
+	-e '/	$/d' \
+	$VENDORSED \
+  | grep -v '^@' \
+  > ${PPD}/macros
+done
+
+#rm $TEMPRC

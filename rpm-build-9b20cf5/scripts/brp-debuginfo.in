@@ -1,0 +1,119 @@
+#!/bin/sh -efu
+#
+# brp-debuginfo - generate /usr/lib/debug and /usr/src/debug contents
+# for debuginfo packages
+#
+# Written by Alexey Tourbin <at@altlinux.org>.  Based on find-debuginfo.sh
+# by Jeff Johnson <jbj@rpm5.org> and Roland McGrath <roland@redhat.com>.
+# Copyright (c) 2020 Vitaly Chikunov <vt@altlinux.org>.
+# License: GPLv2+.
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+ValidateBuildRoot
+
+process_debuginfo="${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/process-debuginfo
+
+cd "$RPM_BUILD_ROOT"
+
+# User disabled debuginfo creation.
+[ -n "${RPM_DEBUGINFO__FIND-}" ] || exit 0
+
+# 'noarch' packages do not generate debuginfo. But, we can only check the
+# top-level BuildArch (for them "Only "noarch" sub-packages are supported").
+[ "$RPM_TARGET_ARCH" != noarch ] || exit 0
+
+rm -rf .tmp
+mkdir .tmp
+
+# Strip binaries, create .debug files under /usr/lib/debug and install sources into /usr/src/debug.
+
+: ${RPM_DEBUGINFO_SKIPLIST:=}
+: ${RPM_DEBUGINFO_STRIPPED_TERMINATE:=}
+
+prune_paths="/lib/firmware /usr/lib/debug /usr/share /usr/src $RPM_DEBUGINFO_SKIPLIST"
+prune_tests="$(printf %s "$prune_paths" |
+		tr '[:space:]' '\n' |
+		sort -u |
+		sed -n '/^\// s/.*/ -o -path .&/p')"
+find . '(' -path './.*' $prune_tests ')' -prune -o -type f -print |sort |
+file4 -NF$'\t' -f - >.tmp/file_full
+
+sed -n -e 's/\t.* ELF .* \(executable\|shared object\), .*, stripped.*//p' <.tmp/file_full >.tmp/fstripped
+if [ -s .tmp/fstripped ]; then
+	howmuch=$(wc -l <.tmp/fstripped)
+	Warning "You have $howmuch stripped ELF objects. Please compile with debugging information!"
+	Warning "An excerpt from the list of affected files follows:"
+	sed 's/^/  /; 10q' <.tmp/fstripped >&2
+	[ -z "$RPM_DEBUGINFO_STRIPPED_TERMINATE" ] \
+		|| Fatal "Stripped files found, terminating build"
+fi
+
+sed -n -e '/ ELF .* shared object, no machine, /d' \
+       -e 's/\t.* ELF .* \(executable\|shared object\), .*, not stripped.*//p' \
+       -e 's/^\(\.\/lib\/modules\/[^[:space:]]\+\.ko\)\t.* ELF .* relocatable, .*, not stripped.*/\1/p' \
+       -e 's/^\(\.\/lib\/modules\/[^[:space:]]\+\.ko\.[gx]z\)\t.* \(gzip\|xz\) compressed data.*/\1/p' \
+       -e 's/^\(\.\/lib\/modules\/[^[:space:]]\+\.ko\.zst\)\t.* Zstandard compressed data.*/\1/p' \
+       -e 's/^\(\.\/boot\/vmlinuz-[^[:space:]]\+\)\t.*/\1/p' <.tmp/file_full |
+xargs -r --delimiter='\n' stat -c '%h %i %n' >.tmp/flist
+
+# Filter out what will be hard-linked later and process the rest.
+while read -r nlink ino f; do
+	if [ "$nlink" -gt 1 ]; then
+		eval f0="\${f0_$ino-}"
+		if [ -n "$f0" ]; then
+			printf '%u %s\n' "$ino" "$f" >&3
+			continue
+		else
+			eval f0_$ino="\$f"
+		fi
+	fi
+	printf '%s\n' "$f"
+done <.tmp/flist \
+     >.tmp/xargs-list \
+    3>.tmp/link-list
+
+xargs -r --delimiter='\n' -P$(nproc) -n1 "$process_debuginfo" <.tmp/xargs-list
+
+# Hard-link debuginfo for hard-linked binaries
+while read -r ino f; do
+	debugf=./usr/lib/debug${f#.}.debug
+	eval f0="\${f0_$ino-}"
+	debugf0=./usr/lib/debug${f0#.}.debug
+	if [ -f "$debugf0" ]; then
+		mkdir -p "${debugf%/*}"
+		ln -nf "$debugf0" "$debugf"
+	fi
+	mkdir -p .debuginfo/src/"${f%/*}"
+	ln -nf .debuginfo/src/"$f0" .debuginfo/src/"$f"
+done <.tmp/link-list
+
+# Make symbolic links that mimic the original tree.
+find . '(' -path './.*' $prune_tests ')' -prune -o -type l -print |sort >.tmp/flist
+while read -r l; do
+	f=$(readlink -vm "$l")
+	f=${f#$RPM_BUILD_ROOT}
+	debugf=./usr/lib/debug$f.debug
+	[ -f "$debugf" ] || continue
+	debugl=./usr/lib/debug${l#.}.debug
+	mkdir -p "${debugl%/*}"
+	ln -snf "$(relative "${debugf#.}" "${debugl#.}")" "$debugl"
+	mkdir -p .debuginfo/links/"${debugf%/*}"
+	printf '%s\n' "${debugl#.}" >>.debuginfo/links/"$debugf"
+done <.tmp/flist
+
+if [ -s .tmp/no_debug_info ]; then
+	howmuch=$(wc -l < .tmp/no_debug_info)
+	Warning "$howmuch non-stripped binaries don't contain .debug sections making -debuginfo"
+	Warning "package less relevant. An excerpt from the list of affected files follows:"
+	sed 's/^/  /; 10q' < .tmp/no_debug_info >&2
+	if grep -E -q '/lib/modules/.*(/vmlinux|\.ko)$' .tmp/no_debug_info; then
+		Warning "Please enable CONFIG_DEBUG_INFO=y in the kernel package!"
+	fi
+	[ -z "$RPM_DEBUGINFO_STRIPPED_TERMINATE" ] \
+		|| Fatal "Files with stripped .debug_info found, terminating build"
+fi
+
+if [ -n "$(find usr/lib/debug -type f -print -quit 2>/dev/null)" ] &&
+   [ -z "$(find usr/src/debug -type f -print -quit 2>/dev/null)" ]; then
+	Warning 'debuginfo without debug sources.'
+fi

@@ -1,0 +1,390 @@
+#!/bin/bash
+# shellcheck disable=SC2120
+
+cd "$(dirname "$0")" || exit 1
+source ./test-functions.sh
+
+topic="simple if/else/endif"
+pass <<-EOF
+	%if 0
+	exit 1
+	%endif
+EOF
+pass <<-EOF
+	%if 1
+	exit 0
+	%endif
+	exit 1
+EOF
+pass <<-EOF
+	%if 0
+	exit 1
+	%else
+	exit 0
+	%endif
+	exit 1
+EOF
+pass <<-EOF
+	%if 1
+	%else
+	exit 1
+	%endif
+EOF
+
+topic="simple with expression"
+pass <<-EOF
+	%define true 1
+	%if %true
+	exit 0
+	%endif
+	exit 1
+EOF
+
+topic="incorrect use"
+xfail <<-EOF
+	%if 1
+	exit 0
+EOF
+xfail <<-EOF
+	%endif
+	exit 0
+EOF
+xfail <<-EOF
+	%else
+	exit 0
+EOF
+xfail <<EOF
+	%if
+	%endif
+EOF
+
+topic="known bugs"
+pass <<-EOF
+	%if0
+	exit 1
+	%endif
+EOF
+pass <<-EOF
+	%if1
+	exit 0
+	%endif
+	exit 1
+EOF
+pass <<-EOF
+	%if 1
+	%else
+	exit 1
+	%else
+	exit 0
+	%endif
+	exit 2
+EOF
+pass <<-EOF
+	%if 0
+	%ifornottoif
+	exit 1
+	%endif
+	exit 1
+	%endif
+EOF
+
+topic="nested conditionals"
+pass <<EOF
+	%if 1
+		%if 1
+		%else
+		exit 1
+		%endif
+	%else
+	exit 2
+		%if 1
+		exit 3
+		%else
+		exit 4
+		%endif
+	exit 5
+	%endif
+EOF
+pass <<EOF
+	%if 0
+		%if 1
+		exit 1
+		%else
+		exit 2
+		%endif
+	exit 3
+	%else
+		%if 1
+		%else
+		exit 4
+		%endif
+	%endif
+EOF
+pass <<EOF
+	%if 1
+		%if 0
+		exit 1
+		%else
+			%if 0
+			exit 2
+			%else
+				%if 1
+				%else
+				exit 3
+				%endif
+			%endif
+		%endif
+	%else
+	exit 4
+	%endif
+EOF
+
+topic="nested unmatched"
+xfail <<EOF
+	%if 0
+		%if 1
+	%else
+	%endif
+EOF
+xfail <<EOF
+	%if 0
+	%else
+		%if 1
+	%endif
+EOF
+
+topic="garbage after %else/%endif"
+pass <<-EOF
+	%if 0
+	%else %if 1
+	%endif %if 1
+EOF
+
+topic="%ifarch/%ifnarch"
+pass <<-EOF
+	%ifarch %_target_cpu
+	exit 0
+	%endif
+	exit 1
+EOF
+pass <<-EOF
+	%ifarch notarch
+	exit 1
+	%endif
+EOF
+pass <<-EOF
+	%ifnarch %_target_cpu
+	exit 1
+	%endif
+EOF
+pass <<-EOF
+	%ifnarch notarch
+	exit 0
+	%endif
+	exit 1
+EOF
+
+topic="%ifod/%ifnos"
+pass <<-EOF
+	%ifos %_target_os
+	exit 0
+	%endif
+	exit 1
+EOF
+pass <<-EOF
+	%ifos not%_target_os
+	exit 1
+	%endif
+EOF
+pass <<-EOF
+	%ifnos %_target_os
+	exit 1
+	%endif
+EOF
+pass <<-EOF
+	%ifnos not%_target_os
+	exit 0
+	%endif
+	exit 1
+EOF
+
+topic="%elif"
+pass <<-EOF
+	%if 0
+	%elif 0
+	exit 1
+	%elif 1
+	exit 0
+	%endif
+	exit 2
+EOF
+pass <<-EOF
+	%if 1
+	%elif 0
+	exit 1
+	%endif
+EOF
+pass <<-EOF
+	%if 1
+	%elif 1
+	exit 1
+	%elif 1
+	exit 2
+	%endif
+EOF
+
+topic="%elif with expression"
+pass <<-EOF
+	%define true 1
+	%if !%true
+	exit 1
+	%elif %true
+	exit 0
+	%endif
+	exit 1
+EOF
+pass <<-EOF
+	%define true 1
+	%if !%true
+	exit 1
+	%elif "%true" == "1"
+	exit 0
+	%endif
+	exit 1
+EOF
+xfail <<-EOF
+	%if 0
+	%elif "" ==
+	exit 0
+	%endif
+	exit 1
+EOF
+pass <<-EOF
+	%global false 0
+	%if 0
+	%elif !%false
+	exit %false
+	%endif
+	exit 1
+EOF
+pass <<-EOF
+	%global false 0
+	%if 0
+	%elif !%false
+	%define code 0
+	%endif
+	exit %{!?code:1}
+EOF
+
+topic="nested %elif"
+pass <<-EOF
+	%if 0
+		%if 0
+		%elif 1
+		exit 1
+		%endif
+	exit 2
+	%endif
+EOF
+pass <<-EOF
+	%if 1
+		%if 1
+		%elif 0
+		exit 1
+		%elif 1
+		exit 2
+		%endif
+	%else
+		%if 0
+		%elif 1
+		exit 3
+		%endif
+	exit 4
+	%endif
+EOF
+pass <<EOF
+	%if 1
+		%if 0
+		%elif 1
+			%if 0
+			%elif 0
+			exit 1
+			%elif 1
+			%else
+			exit 2
+			%endif
+		%else
+		exit 3
+		%endif
+	%elif 1
+	exit 4
+	%else
+	exit 5
+	%endif
+EOF
+
+topic="%elifarch"
+pass <<-EOF
+	%ifarch notarch
+	%elifarch %_target_cpu
+	exit 0
+	%endif
+	exit 1
+EOF
+pass <<-EOF
+	%ifarch notarch
+	%elifarch %_target_cpu
+	%else
+	exit 1
+	%endif
+EOF
+pass <<-EOF
+	%ifarch notarch
+	%else
+	%elifarch %_target_cpu
+	exit 1
+	%endif
+EOF
+pass <<-EOF
+	%ifarch notarch
+	%elifarch %_target_cpu
+	%elifarch %_target_cpu
+	exit 1
+	%else
+	exit 2
+	%endif
+EOF
+
+topic="%else/%endif warnings"
+pass re="malformed %else" <<-EOF
+	%if 0
+	%else %if 0
+	exit 0
+	%endif
+	exit 1
+EOF
+pass re="malformed %else" <<-EOF
+	%if 0
+	%elseif 0
+	exit 0
+	%endif
+	exit 1
+EOF
+pass re="malformed %else" <<-EOF
+	%if 0
+	%else \\
+	exit
+	%endif
+	exit 1
+EOF
+xfail re="Unclosed %if" <<-EOF
+	%if 0
+	%else \\
+	%endif
+EOF
+pass re="malformed %endif" <<-EOF
+	%if 1
+	%else
+	%endif \\
+	exit 1
+EOF

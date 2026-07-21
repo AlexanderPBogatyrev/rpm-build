@@ -1,0 +1,50 @@
+#!/bin/sh -e
+#
+# brp-dupe-bin - change symlinks to files in bin and sbin in buildroot.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+#
+# This module attempts to fix all the various arrangements of files under
+# /{,s}bin in the buildroot to make the package installable on *both*
+# unmerged-usr and merged-usr hierarchies, regardless of split-usr.
+# It can be removed when support for unmerged-usr is dropped.
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+ValidateBuildRoot
+
+cd "$RPM_BUILD_ROOT"
+echo "Splitting links to aliased files under /{,s}bin in $RPM_BUILD_ROOT"
+
+for DIR in bin sbin; do
+    [ -d "$DIR" ] || continue
+    find "$DIR" -mindepth 1 -type f -printf '%f\n' | while read -r FILE; do
+        [ -e "usr/$DIR/$FILE" ] || continue
+        if [ -L "usr/$DIR/$FILE" ] ; then
+            rm "usr/$DIR/$FILE"
+            cp -vT --preserve=all -- "$DIR/$FILE" "usr/$DIR/$FILE"
+        elif ! diff -q "$DIR/$FILE" "usr/$DIR/$FILE"; then
+            Fatal "Found different files $RPM_BUILD_ROOT/usr/$DIR/$FILE and $RPM_BUILD_ROOT/$DIR/$FILE"
+        fi
+    done
+    find "$DIR" -mindepth 1 -type l -printf '%f\n' | while read -r FILE; do
+        [ -e "usr/$DIR/$FILE" ] || continue
+        if [ ! -L "usr/$DIR/$FILE" ] ; then
+            rm "$DIR/$FILE"
+            cp -vT --preserve=all -- "usr/$DIR/$FILE" "$DIR/$FILE"
+        elif ! diff -q "$DIR/$FILE" "usr/$DIR/$FILE" --no-dereference; then
+            Fatal "Found different symlinks $RPM_BUILD_ROOT/usr/$DIR/$FILE and $RPM_BUILD_ROOT/$DIR/$FILE"
+        fi
+    done
+done

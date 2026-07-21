@@ -1,0 +1,21 @@
+#!/bin/sh -efu
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+
+StaticReq()
+{
+	local f="$1"; shift
+	[ -z "${f##*.a}" ] || return 0
+
+	local name="${RPM_SUBPACKAGE_NAME-}"
+	[ -n "$name" ] || name=$(rpmquery --qf '%{NAME}\n' -f -- "$f")
+
+	case "$name" in
+		glibc*) return 0 ;;
+		*-devel-static) echo glibc-devel-static ;;
+		*) Verbose "package $name has static library ${f#${RPM_BUILD_ROOT-}}" ;;
+	esac
+}
+
+ArgvFileAction StaticReq "$@"

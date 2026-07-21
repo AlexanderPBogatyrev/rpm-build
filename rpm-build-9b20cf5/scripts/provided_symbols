@@ -1,0 +1,36 @@
+#!/bin/sh -efu
+#
+# Copyright (C) 2010-2011  Alexey Tourbin <at@altlinux.org>
+# Copyright (C) 2018  Dmitry V. Levin <ldv@altlinux.org>
+# Copyright (C) 2018  Gleb Fotengauer-Malinovskiy <glebfm@altlinux.org>
+# All rights reserved.
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+export LC_ALL=C
+
+eu-readelf --wide --dyn-syms -- "$@" |
+	awk '+$1 && NF>=8 &&
+# dl-lookup.c: /st_value
+($2!="00000000" && $2!="0000000000000000" || $4=="TLS") &&
+# dl-lookup.c: /ALLOWED_STT
+($4 == "NOTYPE" || $4 == "OBJECT" || $4 == "FUNC" || $4 == "COMMON" || $4 == "TLS" ||
+ $4 == "IFUNC" || $4 == "GNU_IFUNC") &&
+# dl-lookup.c: /hidden
+($6=="DEFAULT" || $6=="PROTECTED") &&
+# dl-lookup.c: /switch.*ST_BIND
+($5 == "GLOBAL" || $5 == "WEAK" || $5 == "UNIQUE" || $5 == "GNU_UNIQUE") {
+	# dl-lookup.c: /st_shndx
+	match($0, "[[:space:]][[:digit:]]+[[:space:]]+([^[:space:]()@]+)(@+[^[:space:]()@]+)?$", a)
+	sym = a[1]
+	if (sym == "" ||
+	    # ignore special symbols found in each library
+	    sym == "__bss_start" ||
+	    sym == "_edata" ||
+	    sym == "_end" ||
+	    sym == "_fini" ||
+	    sym == "_init")
+		next
+	print sym
+}' |
+	sort -u

@@ -1,0 +1,619 @@
+# Per-platform rpm configuration file.
+
+#==============================================================================
+# ---- per-platform macros.
+#
+%_arch			@RPMRC_ARCH@
+%_vendor		@RPMCANONVENDOR@
+%_os			@RPMCANONOS@
+%_gnu			@RPMCANONGNU@
+%_gnueabi		@RPMCANONGNUEABI@
+%_target_platform	%{_target_cpu}-%{_vendor}-%{_target_os}%{_gnueabi}
+%optflags		@RPMRC_OPTFLAGS@
+
+#==============================================================================
+# ---- configure macros.
+#
+%_prefix		@prefix@
+%_exec_prefix		@exec_prefix@
+%_bindir		@bindir@
+%_sbindir		@sbindir@
+%_libexecdir		@libexecdir@
+%_datadir		@datadir@
+%_sysconfdir		@sysconfdir@
+%_sharedstatedir	%{_var}/lib
+%_localstatedir		@localstatedir@
+%_libsuff		@LIBSUFF_DEFINITION@
+@LIBSUFF_EXISTS@%_is_libsuff	1
+%_lib			lib@LIBSUFF@
+%_libdir		@prefix@/lib@LIBSUFF@
+%_pointer_size		@POINTER_SIZE@
+%_is_ilp32		@ARCH_ILP32@
+%_is_lp64		@ARCH_LP64@
+%_includedir		@includedir@
+%_oldincludedir		@oldincludedir@
+%_infodir		@infodir@
+%_mandir		@mandir@
+%_initrddir		%{_sysconfdir}/rc.d/init.d
+
+%_defaultdocdir		@DEFAULTDOCDIR@
+
+#==============================================================================
+# ---- configure and makeinstall.
+#
+%_configure_script	./configure
+%_configure_platform_noarch %{_host_cpu}-%{_vendor}-%{_target_os}%{_gnueabi}
+%_configure_platform %{expand:%%{?_configure_platform_%_target_cpu}%%{!?_configure_platform_%_target_cpu:%%_target_platform}}
+%_configure_target	--build=%{_configure_platform} --host=%{_configure_platform}
+%_configure_gettext	--without-included-gettext
+%_configure_update_config	readlink -e -- '%{_configure_script}' |xargs -ri dirname -- '{}' |xargs -ri find '{}' -type f '(' -name config.sub -or -name config.guess ')' -printf '%%h/\\n' |sort -u |xargs -rn1 install -pm755 -- /usr/share/gnu-config/config.{sub,guess}
+%_configure_use_runstatedir 1
+%_configure_detect_runstatedir \
+  if grep -qF 'runstatedir=DIR' '%{_configure_script}'; then \
+    configure_runstatedir_flags='--runstatedir=%{_runstatedir}' \
+  else \
+    echo >&2 'rpm-build: warning: %{_configure_script} script does not support --runstatedir' \
+  fi
+
+%configure \
+  CFLAGS="${CFLAGS:-%optflags}"; export CFLAGS; \
+  CXXFLAGS="${CXXFLAGS:-%optflags}"; export CXXFLAGS; \
+  FFLAGS="${FFLAGS:-%optflags}"; export FFLAGS; \
+  FCFLAGS="${FCFLAGS:-%optflags}"; export FCFLAGS; \
+  [ -n "${ASFLAGS-}" ] || ASFLAGS="$(printf %%s '%optflags' |sed -r 's/(^|[[:space:]]+)-[^m][^[:space:]]*//g')"; export ASFLAGS; \
+  %{?_disable_static:export lt_cv_prog_cc_static_works=no ;} \
+  %{?_enable_static:export lt_cv_prog_cc_static_works=yes ;} \
+  export lt_cv_deplibs_check_method=pass_all ; \
+  %{_configure_update_config}; \
+  configure_runstatedir_flags= ; \
+  %{?_configure_use_runstatedir:%{_configure_detect_runstatedir}} \
+  %{_configure_script} %{?_configure_target:%{_configure_target}} \\\
+ 	--prefix=%{_prefix} \\\
+	--exec-prefix=%{_exec_prefix} \\\
+	--bindir=%{_bindir} \\\
+	--sbindir=%{_sbindir} \\\
+	--sysconfdir=%{_sysconfdir} \\\
+	--datadir=%{_datadir} \\\
+	--includedir=%{_includedir} \\\
+	--libdir=%{_libdir} \\\
+	--libexecdir=%{_libexecdir} \\\
+	--localstatedir=%{_localstatedir} \\\
+	--sharedstatedir=%{_sharedstatedir} \\\
+	--mandir=%{_mandir} \\\
+	--infodir=%{_infodir} \\\
+	--disable-dependency-tracking \\\
+	--disable-silent-rules \\\
+	$configure_runstatedir_flags \\\
+	%{?_configure_gettext:%{_configure_gettext}}
+
+%_makeinstall_target	install
+%makeinstall \
+  %__make INSTALL="/usr/libexec/rpm-build/install -p" \\\
+	prefix=%{?buildroot:%{buildroot}}%{_prefix} \\\
+	exec_prefix=%{?buildroot:%{buildroot}}%{_exec_prefix} \\\
+	bindir=%{?buildroot:%{buildroot}}%{_bindir} \\\
+	sbindir=%{?buildroot:%{buildroot}}%{_sbindir} \\\
+	sysconfdir=%{?buildroot:%{buildroot}}%{_sysconfdir} \\\
+	datadir=%{?buildroot:%{buildroot}}%{_datadir} \\\
+	includedir=%{?buildroot:%{buildroot}}%{_includedir} \\\
+	libdir=%{?buildroot:%{buildroot}}%{_libdir} \\\
+	libexecdir=%{?buildroot:%{buildroot}}%{_libexecdir} \\\
+	localstatedir=%{?buildroot:%{buildroot}}%{_localstatedir} \\\
+	runstatedir=%{?buildroot:%{buildroot}}%{_runstatedir} \\\
+	sharedstatedir=%{?buildroot:%{buildroot}}%{_sharedstatedir} \\\
+	mandir=%{?buildroot:%{buildroot}}%{_mandir} \\\
+	infodir=%{?buildroot:%{buildroot}}%{_infodir} \\\
+  %{?_makeinstall_target:%{_makeinstall_target}}
+
+#==============================================================================
+# ---- Build policy macros.
+#
+#---------------------------------------------------------------------
+#	Expanded at end of %install scriptlet.
+#
+
+%__arch_install_post   @ARCH_INSTALL_POST@
+
+%__os_install_post\
+@RPMCONFIGDIR@/brp-%{_vendor}\
+%{nil}
+
+#---------------------------------------------------------------------
+#	ALT vendor specific macros.
+#	Contact rpm@packages.altlinux.org for details.
+#
+%distribution	ALT
+%vendor	ALT Linux Team
+
+%___build_pre	\
+	export RPM_SOURCE_DIR=\"%{u2p:%_sourcedir}\"\
+	export RPM_BUILD_DIR=\"%{u2p:%_builddir}\"\
+	export RPM_OPT_FLAGS=\"%optflags\"\
+	export RPM_ARCH=\"%_arch\"\
+	export RPM_OS=\"%_os\"\
+	export RPM_TARGET_ARCH=\"%_target_cpu\"\
+	export RPM_TARGET_OS=\"%_target_os\"\
+	export RPM_DOC_DIR=\"%_docdir\"\
+	export RPM_PACKAGE_NAME=\"%name\"\
+	export RPM_PACKAGE_VERSION=\"%version\"\
+	export RPM_PACKAGE_RELEASE=\"%release\"\
+	export RPM_BUILD_ROOT=\"%{u2p:%buildroot}\"\
+	%{?_check_contents_method:export RPM_CHECK_CONTENTS_METHOD=\"%_check_contents_method\"}\
+	%{?_cleanup_method:export RPM_CLEANUP_METHOD=\"%_cleanup_method\"}\
+	%{?_compress_method:export RPM_COMPRESS_METHOD=\"%_compress_method\"}\
+	%{?_fixup_method:export RPM_FIXUP_METHOD=\"%_fixup_method\"}\
+	%{?_verify_elf_method:export RPM_VERIFY_ELF_METHOD=\"%_verify_elf_method\"}\
+	%{?_verify_info_method:export RPM_VERIFY_INFO_METHOD=\"%_verify_info_method\"}\
+	%{?_findreq_method:export RPM_FINDREQ_METHOD=\"%_findreq_method\"}\
+	%{?_findprov_method:export RPM_FINDPROV_METHOD=\"%_findprov_method\"}\
+	%{?_check_contents_topdir:export RPM_CHECK_CONTENTS_TOPDIR=\"%_check_contents_topdir\"}\
+	%{?_cleanup_topdir:export RPM_CLEANUP_TOPDIR=\"%_cleanup_topdir\"}\
+	%{?_compress_topdir:export RPM_COMPRESS_TOPDIR=\"%_compress_topdir\"}\
+	%{?_fixup_topdir:export RPM_FIXUP_TOPDIR=\"%_fixup_topdir\"}\
+	%{?_verify_elf_topdir:export RPM_VERIFY_ELF_TOPDIR=\"%_verify_elf_topdir\"}\
+	%{?_findreq_topdir:export RPM_FINDREQ_TOPDIR=\"%_findreq_topdir\"}\
+	%{?_findprov_topdir:export RPM_FINDPROV_TOPDIR=\"%_findprov_topdir\"}\
+	%{?_check_contents_skiplist:export RPM_CHECK_CONTENTS_SKIPLIST=\"%_check_contents_skiplist\"}\
+	%{?_cleanup_skiplist:export RPM_CLEANUP_SKIPLIST=\"%_cleanup_skiplist\"}\
+	%{?_compress_skiplist:export RPM_COMPRESS_SKIPLIST=\"%_compress_skiplist\"}\
+	%{?_debuginfo_skiplist:export RPM_DEBUGINFO_SKIPLIST=\"%_debuginfo_skiplist\"}\
+	%{?__find_debuginfo_files:export RPM_DEBUGINFO__FIND=\"%__find_debuginfo_files\"}\
+	%{?_stripped_files_terminate_build:export RPM_DEBUGINFO_STRIPPED_TERMINATE=\"%_stripped_files_terminate_build\"}\
+	%{?_fixup_skiplist:export RPM_FIXUP_SKIPLIST=\"%_fixup_skiplist\"}\
+	%{?_verify_elf_skiplist:export RPM_VERIFY_ELF_SKIPLIST=\"%_verify_elf_skiplist\"}\
+	%{?_findreq_skiplist:export RPM_FINDREQ_SKIPLIST=\"%_findreq_skiplist\"}\
+	%{?_findprov_skiplist:export RPM_FINDPROV_SKIPLIST=\"%_findprov_skiplist\"}\
+	%{?_findpackage_path:export RPM_FINDPACKAGE_PATH=\"%_findpackage_path\"}\
+	%{?_findprov_lib_path:export RPM_FINDPROV_LIB_PATH=\"%_findprov_lib_path\"}\
+	%{?_pkg_contents_index_all:export RPM_PKG_CONTENTS_INDEX_ALL=\"%_pkg_contents_index_all\"}\
+	%{?_pkg_contents_index_bin:export RPM_PKG_CONTENTS_INDEX_BIN=\"%_pkg_contents_index_bin\"}\
+	%{?_scripts_debug:export RPM_SCRIPTS_DEBUG=\"%_scripts_debug\"}\
+	%{?_keep_libtool_files:export RPM_KEEP_LIBTOOL_FILES=\"%_keep_libtool_files\"}\
+	%{?_brp_strip_debug:export RPM_BRP_STRIP_DEBUG=\"%_brp_strip_debug\"}\
+	%{?_brp_strip_none:export RPM_BRP_STRIP_NONE=\"%_brp_strip_none\"}\
+	\
+	%{?__find_requires_filter:export RPM_FIND_REQUIRES_FILTER=$(cat <<'!FIND!REQUIRES!FILTER!'\
+%__find_requires_filter\
+!FIND!REQUIRES!FILTER!\
+)}\
+	%{?__find_provides_filter:export RPM_FIND_PROVIDES_FILTER=$(cat <<'!FIND!PROVIDES!FILTER!'\
+%__find_provides_filter\
+!FIND!PROVIDES!FILTER!\
+)}\
+	unset LANG LANGUAGE LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT LC_IDENTIFICATION LC_ALL ||:\
+	%{?_build_lang:export LANG=\"%_build_lang\"\
+	export LANGUAGE=\"%_build_lang\"\
+	export LC_ALL=\"%_build_lang\"}\
+	\
+	unset DISPLAY XAUTHORITY ||:\
+	%{?_build_display:export DISPLAY=\"%_build_display\"}\
+	%{?_build_xauthority:export XAUTHORITY=\"%_build_xauthority\"}\
+	\
+	export RPM_PREFIX=\"%_prefix\"\
+	export RPM_LIB=\"%_lib\"\
+	export RPM_LIBDIR=\"%_libdir\"\
+	export RPM_DATADIR=\"%_datadir\"\
+	\
+	unset AUTOCONF_VERSION AUTOMAKE_VERSION LIBTOOL_VERSION GCC_VERSION ||:\
+	%{?_autoconf_version:export AUTOCONF_VERSION=\"%_autoconf_version\"}\
+	%{?_automake_version:export AUTOMAKE_VERSION=\"%_automake_version\"}\
+	%{?_libtool_version:export LIBTOOL_VERSION=\"%_libtool_version\"}\
+	%{?_gcc_version:export GCC_VERSION=\"%_gcc_version\"}\
+	\
+	export PAM_SO_SUFFIX=\"%{?_pam_so_suffix}\"\
+	export PAM_NAME_SUFFIX=\"%{?_pam_name_suffix}\"\
+	\
+	export MAKEFLAGS=\"-w -O PAM_SO_SUFFIX=%{?_pam_so_suffix}\"\
+	\
+	%{expand:%(cat @RPMCONFIGDIR@/macros.d/*.env @SYSCONFIGDIR@/macros.d/*.env 2>/dev/null)}\
+	\
+	%{verbose:set -x}\
+	umask 022\
+	%__mkdir_p %{u2p:%_builddir}\
+	cd %{u2p:%_builddir}\
+%nil
+
+%__spec_install_pre\
+%{___build_pre}\
+%clean_buildroot\
+PATH=/usr/libexec/rpm-build:$PATH\
+%{__spec_install_custom_pre}\
+%nil
+
+%__spec_check_pre\
+%{?!_enable_check:%{?_disable_check:echo 'Check is turned off by --disable check' >&2; exit 0}}\
+%{?!_with_check:%{?_without_check:echo 'Check is turned off by --without check' >&2; exit 0}}\
+%{?!_enable_test:%{?_disable_test:echo 'Check is turned off by --disable test' >&2; exit 0}}\
+%{?!_with_test:%{?_without_test:echo 'Check is turned off by --without test' >&2; exit 0}}\
+%{___build_pre}\
+%{__spec_check_custom_pre}\
+%nil
+
+%__spec_clean_post\
+%clean_buildroot\
+%{___build_post}\
+%{__spec_clean_custom_post}\
+%nil
+
+%_fixperms	%{__chmod} -c -Rf u+rwX,go-w
+
+%_internal_gpg_path	/usr/lib/alt-gpgkeys
+
+%prefix	%_prefix
+
+%clean_buildroot	%{?buildroot:%([ -n "$(echo %buildroot |tr -d /.)" ] && echo "%__chmod -Rf u+rwX -- %buildroot 2>/dev/null ||:; %__rm -rf -- %buildroot")}
+
+%remove_optflags(a:f:t:p:w:W:d:g:O:A:C:D:E:H:i:M:n:P:U:u:l:s:X:B:I:L:b:V:m:x:c:S:E:o:v:)	\
+%global optflags %(opt="%optflags"; for f in %{**}; do opt="$(echo "$opt"|sed -e "s/ $f//g;s/$f //g")"; done; echo "$opt")
+
+%add_optflags(a:f:t:p:w:W:d:g:O:A:C:D:E:H:i:M:n:P:U:u:l:s:X:B:I:L:b:V:m:x:c:S:E:o:v:)	\
+%global optflags %{optflags} %{**}
+
+%warning() %{warn:WARNING: %*\
+}
+
+# Make
+%_make_bin make
+
+%__nprocs	%getncpus
+%_smp_build_ncpus	${NPROCS:-%__nprocs}
+%_smp_mflags	-j%_smp_build_ncpus
+%make_build	%_make_bin %_smp_mflags
+
+%make_install	%_make_bin INSTALL="/usr/libexec/rpm-build/install -p"
+%makeinstall_std	%make_install %{?_makeinstall_target:%{_makeinstall_target}} DESTDIR=%buildroot
+
+# Compatibility.
+%make_compile	%make_build
+%make	%_make_bin
+%__autoreconf		%{warning %%__autoreconf is obsolete, use %%autoreconf instead}%autoreconf
+
+# Autotools.
+%autoreconf		autoreconf -fisv
+
+# Macros used for service install/uninstall.
+%pre_service_stop_posttrans_start	/usr/sbin/pre_service
+%post_service				/usr/sbin/post_service
+%post_service_posttrans_restart		/usr/sbin/post_service_postponed
+%preun_service				/usr/sbin/preun_service
+
+# Manpage directories.
+%_man1dir		%_mandir/man1
+%_man2dir		%_mandir/man2
+%_man3dir		%_mandir/man3
+%_man4dir		%_mandir/man4
+%_man5dir		%_mandir/man5
+%_man6dir		%_mandir/man6
+%_man7dir		%_mandir/man7
+%_man8dir		%_mandir/man8
+%_man9dir		%_mandir/man9
+
+# Desktop-related directories.
+%_menudir	%_prefix/lib/menu
+%_iconsdir	%_datadir/icons
+%_miconsdir	%_iconsdir/hicolor/16x16/apps
+%_niconsdir	%_iconsdir/hicolor/32x32/apps
+%_liconsdir	%_iconsdir/hicolor/48x48/apps
+%_desktopdir	%_datadir/applications
+%_pixmapsdir	%_datadir/pixmaps
+
+# Games directories.
+%_gamesdir	games
+%_gamesbindir	%{_prefix}/%{_gamesdir}
+%_gamesdatadir	%{_datadir}/%{_gamesdir}
+
+# X11 directories.
+%_x11dir		%{_prefix}
+%_x11bindir	%{_bindir}
+%_x11libdir	%{_libdir}
+%_x11x11libdir	%{_libdir}/X11
+%_x11x11dir	%{_datadir}/X11
+%_x11includedir	%{_includedir}
+%_x11mandir	%{_mandir}
+%_x11datadir	%{_datadir}
+%_x11fontsdir	%{_datadir}/X11/fonts
+%_x11modulesdir	%{_libdir}/X11/modules
+%_x11drvddir	%{_prefix}/libexec/X11/drv.d
+%_x11sysconfdir	%{_sysconfdir}/X11
+%_x11appconfdir	%{_sysconfdir}/X11/app-defaults
+
+# Initscripts.
+%_initdir	%{_sysconfdir}/rc.d/init.d
+
+# logrotate configs.
+%_logrotatedir	%{_sysconfdir}/logrotate.d
+
+# Licenses.
+%_licensedir	%{_datadir}/license
+
+# Systemwide directory for aclocal(1) files.
+%_aclocaldir	%{_datadir}/aclocal
+
+# Common lock directory.
+%_lockdir	%{_var}/lock
+# Subsystem lock directory.
+%_locksubsysdir	%{_var}/lock/subsys
+
+# Common log directory.
+%_logdir	%{_var}/log
+
+# Application cache data directory.
+%_cachedir	%{_var}/cache
+
+# Application runtime directory.
+%_runtimedir	%{_var}/run
+%_runstatedir	%{_var}/run
+
+# Application spool data directory.
+%_spooldir	%{_var}/spool
+
+# pkg-config directory.
+%_pkgconfigdir	%{_libdir}/pkgconfig
+
+# Directory for emacs lisp modules.
+%_emacslispdir	%{_datadir}/emacs/site-lisp
+
+# RPM directories.
+%_rpmlibdir	%_prefix/lib/rpm
+%_rpmmacrosdir	%_rpmlibdir/macros.d
+
+# target libdir.
+%_target_libdir_noarch	/usr/lib
+%_target_libdir	%{expand:%%{?_target_libdir_%_target_cpu}%%{!?_target_libdir_%_target_cpu:%%_libdir}}
+
+%_defattr	%%defattr(-,root,root,755)
+
+%_check_contents_method	default
+%_cleanup_method	auto
+%_compress_method	auto
+%_verify_elf_method	default
+%_verify_info_method	normal
+%_fixup_method	binconfig pkgconfig libtool desktop gnuconfig
+
+%_check_contents_topdir	%nil
+%_cleanup_topdir	%nil
+%_compress_topdir	%_usr
+%_fixup_topdir	%nil
+%_verify_elf_topdir	%nil
+%_findreq_topdir	%nil
+%_findprov_topdir	%nil
+
+%_check_contents_skiplist	%nil
+%_cleanup_skiplist	%nil
+%_compress_skiplist	%nil
+%_debuginfo_skiplist	%nil
+%_fixup_skiplist	%nil
+%_verify_elf_skiplist	%nil
+%_findreq_skiplist	%_docdir/*
+%_findprov_skiplist	%_docdir/*
+
+%_findpackage_path		%nil
+%_findprov_lib_path	%nil
+
+%set_check_contents_method()	%global _check_contents_method %*
+%set_cleanup_method()	%global _cleanup_method %*
+%set_compress_method()	%global _compress_method %*
+%set_fixup_method()	%global _fixup_method %*
+%set_verify_elf_method()	%global _verify_elf_method %*
+%set_verify_info_method()	%global _verify_info_method %*
+
+%set_check_contents_topdir()	%global _check_contents_topdir %*
+%set_cleanup_topdir()	%global _cleanup_topdir %*
+%set_compress_topdir()	%global _compress_topdir %*
+%set_fixup_topdir()	%global _fixup_topdir %*
+%set_verify_elf_topdir()	%global _verify_elf_topdir %*
+%set_findreq_topdir()	%global _findreq_topdir %*
+%set_findprov_topdir()	%global _findprov_topdir %*
+
+%set_check_contents_skiplist()	%global _check_contents_skiplist %*
+%set_cleanup_skiplist()	%global _cleanup_skiplist %*
+%set_compress_skiplist()	%global _compress_skiplist %*
+%set_debuginfo_skiplist()	%global _debuginfo_skiplist %*
+%set_fixup_skiplist()	%global _fixup_skiplist %*
+%set_verify_elf_skiplist()	%global _verify_elf_skiplist %*
+%set_findreq_skiplist()	%global _findreq_skiplist %*
+%set_findprov_skiplist()	%global _findprov_skiplist %*
+
+%set_findpackage_path()	%global _findpackage_path %*
+%set_findprov_lib_path()	%global _findprov_lib_path %*
+
+%add_check_contents_skiplist()	%global _check_contents_skiplist %_check_contents_skiplist %*
+%add_cleanup_skiplist()	%global _cleanup_skiplist %_cleanup_skiplist %*
+%add_compress_skiplist()	%global _compress_skiplist %_compress_skiplist %*
+%add_debuginfo_skiplist()	%global _debuginfo_skiplist %_debuginfo_skiplist %*
+%add_fixup_skiplist()	%global _fixup_skiplist %_fixup_skiplist %*
+%add_verify_elf_skiplist()	%global _verify_elf_skiplist %_verify_elf_skiplist %*
+%add_findreq_skiplist()	%global _findreq_skiplist %_findreq_skiplist %*
+%add_findprov_skiplist()	%global _findprov_skiplist %_findprov_skiplist %*
+
+%filter_from_requires()   %global __find_requires_filter %{?!__find_requires_filter:%__sed}%{?__find_requires_filter} -e '%*'
+%filter_from_provides()   %global __find_provides_filter %{?!__find_provides_filter:%__sed}%{?__find_provides_filter} -e '%*'
+
+%brp_strip_debug()		%global _brp_strip_debug %{?_brp_strip_debug} %*
+%brp_strip_none()		%global _brp_strip_none %{?_brp_strip_none} %*
+
+%add_findpackage_path()	%global _findpackage_path %_findpackage_path %*
+%add_findprov_lib_path()	%global _findprov_lib_path %_findprov_lib_path %*
+
+%_buildrequires_build %nil
+
+%set_autoconf_version() \
+%global _autoconf_version %* \
+%global _buildrequires_build %_buildrequires_build autoconf_%_autoconf_version \
+%nil
+
+%set_automake_version() \
+%global _automake_version %* \
+%global _buildrequires_build %_buildrequires_build automake_%_automake_version \
+%nil
+
+%set_libtool_version() \
+%global _libtool_version %* \
+%global _buildrequires_build %_buildrequires_build libtool_%_libtool_version \
+%nil
+
+%set_gcc_version() \
+%global _gcc_version %* \
+%global _buildrequires_build %_buildrequires_build gcc%_gcc_version \
+%nil
+
+%cleanup_build	@RPMCONFIGDIR@/brp-cleanup
+
+%compress_docs	@RPMCONFIGDIR@/brp-compress
+
+# Alternate build section header for "multi-build" packages.
+%buildmulti	\
+%global	__spec_install_pre	%{___build_pre}\
+%build\
+%clean_buildroot\
+%{__spec_install_custom_pre}\
+%nil
+
+# MDK backwards compatibility.
+%_install_info		%install_info
+%_remove_install_info	%uninstall_info
+
+%_initddir		%_initdir
+%_initrddir	%_initdir
+%make_session	%nil
+
+%EVR	%{?epoch:%epoch:}%{version}-%{release}
+
+# GCC versioning.
+%__gcc_version %(gcc -dumpversion)
+%__gcc_version_major %(gcc -dumpversion |cut -d. -f1)
+%__gcc_version_minor %(gcc -dumpversion |cut -d. -f2)
+%__gcc_version_patch %(gcc -dumpversion |cut -d. -f3)
+%__gcc_version_base %(	\
+  maj=`echo %__gcc_version_major`;	\
+  min=`echo %__gcc_version_minor`;	\
+  if [ "$maj" -ge 5 ]; then	\
+    echo -n "$maj";	\
+  else	\
+    echo -n "$maj.$min";	\
+  fi	\
+)
+
+# <BEGIN GLIBC TRICKS
+%__glibc_version %(rpmquery --qf '%%{VERSION}' glibc)
+%__glibc_version_major %(echo %__glibc_version |cut -d. -f1)
+%__glibc_version_minor %(	\
+	maj=`echo %__glibc_version_major`;	\
+	min=`echo %__glibc_version|cut -d. -f2`;	\
+	rel=`echo %__glibc_version|cut -d. -f3`;	\
+	[ -n "$rel" ] || rel=0;	\
+	if [ "$maj" -eq 2 -a "$min" -eq 1 -a "$rel" -gt 90 ]; then	\
+		min=2	\
+	fi	\
+	echo -n "$min"	\
+)
+# END GLIBC TRICKS>
+
+%__python_version	%(%__python -c 'import sys; print "%%u.%%u" %% sys.version_info[0:2]' 2>/dev/null || echo unknown)
+
+# Access components of packager macro.
+%packagerName	%(echo -E '%packager' |sed -e 's/[[:space:]]*<.*//')
+%packagerAddress	%(echo -E '%packager' |sed -e 's/.*<\\\([^<>]\\+@[^<>]\\+\\\)>.*/\\1/')
+
+#
+# With/without/enable/disable logic.
+#
+
+# Set with/without default value.
+%def_with() %{expand:%%{!?_with_%{1}: %%{!?_without_%{1}: %%global _with_%{1} --with-%{1}}}}
+%def_without() %{expand:%%{!?_with_%{1}: %%{!?_without_%{1}: %%global _without_%{1} --without-%{1}}}}
+
+# Set enable/disable default value.
+%def_enable() %{expand:%%{!?_enable_%{1}: %%{!?_disable_%{1}: %%global _enable_%{1} --enable-%{1}}}}
+%def_disable() %{expand:%%{!?_enable_%{1}: %%{!?_disable_%{1}: %%global _disable_%{1} --disable-%{1}}}}
+
+# Set with/without value.
+%force_with() %{expand:%%global _with_%{1} --with-%{1}}
+%force_without() %{expand:%%global _without_%{1} --without-%{1}}
+
+# Set enable/disable value.
+%force_enable() %{expand:%%global _enable_%{1} --enable-%{1}}
+%force_disable() %{expand:%%global _disable_%{1} --disable-%{1}}
+
+# Check whether both _with_%{1} and _without_%{1} are defined.
+%check_def() %{expand:%%{?_with_%{1}: %%{?_without_%{1}: %%{error: both _with_%{1} and _without_%{1} are defined}}}} \
+	%{expand:%%{?_enable_%{1}: %%{?_disable_%{1}: %%{error: both _enable_%{1} and _disable_%{1} are defined}}}}
+
+# Check for defined/undefined.
+%defined() %{expand:%%{?%{1}:1}%%{!?%{1}:0}}
+%undefined() %{expand:%%{?%{1}:0}%%{!?%{1}:1}}
+
+# ifdef/ifndef.
+%ifdef() %if %{expand:%%{?%{1}:1}%%{!?%{1}:0}}
+%ifndef() %if %{expand:%%{?%{1}:0}%%{!?%{1}:1}}
+
+# Check for with/without.
+%with() %{expand:%%{?_with_%{1}:1}%%{!?_with_%{1}:0}}
+%without() %{expand:%%{?_without_%{1}:1}%%{!?_without_%{1}:0}}
+
+# if_with/if_without.
+%if_with() %if %{expand:%%{?_with_%{1}:1}%%{!?_with_%{1}:0}}
+%if_without() %if %{expand:%%{?_without_%{1}:1}%%{!?_without_%{1}:0}}
+
+# Check for enabled/disabled.
+%enabled() %{expand:%%{?_enable_%{1}:1}%%{!?_enable_%{1}:0}}
+%disabled() %{expand:%%{?_disable_%{1}:1}%%{!?_disable_%{1}:0}}
+
+# if_enabled/if_disabled.
+%if_enabled() %if %{expand:%%{?_enable_%{1}:1}%%{!?_enable_%{1}:0}}
+%if_disabled() %if %{expand:%%{?_disable_%{1}:1}%%{!?_disable_%{1}:0}}
+
+# substitute with/without/enable/disable macros.
+%subst_with() %{expand:%%{?_with_%{1}:%%{_with_%{1}}}} %{expand:%%{?_without_%{1}:%%{_without_%{1}}}}
+%subst_enable() %{expand:%%{?_enable_%{1}:%%{_enable_%{1}}}} %{expand:%%{?_disable_%{1}:%%{_disable_%{1}}}}
+
+# Fetch name/serial/version/release fields.
+%get_version()	%(rpmquery --qf '%%{VERSION}' %1 2>/dev/null)
+%get_release()	%(rpmquery --qf '%%{RELEASE}' %1 2>/dev/null)
+%get_serial()	%(rpmquery --qf '%%{SERIAL}' %1 2>/dev/null)
+%add_serial()	%(rpmquery --qf '%%|SERIAL?{Serial: %%{SERIAL}}|' %1 2>/dev/null)
+%get_SVR()	%(rpmquery --qf '%%|SERIAL?{%%{SERIAL}:}|%%{VERSION}-%%{RELEASE}' %1 2>/dev/null)
+%get_NSVR()	%(rpmquery --qf '%%{NAME}-%%|SERIAL?{%%{SERIAL}:}|%%{VERSION}-%%{RELEASE}' %1 2>/dev/null)
+%get_dep()	%(rpmquery --qf '%%{NAME} >= %%|SERIAL?{%%{SERIAL}:}|%%{VERSION}-%%{RELEASE}' %1 2>/dev/null || echo '%1 >= unknown')
+%rpm_check_field(p:)	%(foo=`rpmquery --qf '%%{%1}' %{-p:%{-p*}} 2>/dev/null`; [ "`expr '$foo' '>' '%2'`" -eq 1 ] && echo -n "$foo" || echo -n "%2")
+
+## compiler optflags defaults
+
+# core flags
+%optflags_core	-pipe -frecord-gcc-switches
+
+# default optimization level
+%_optlevel	2
+
+# general optimization flags
+%optflags_optimization -O%{_optlevel}
+
+# warning flags
+%optflags_warnings	-Wall%{?_enable_Werror: -Werror}
+
+# debug flags
+%optflags_debug	-g
+
+# shared libraries flags
+%optflags_shared	-fPIC -DPIC
+
+# break c++ programs which use exceptions
+%optflags_nocpp	-fno-exceptions -fno-rtti
+
+# disables traceback, making debugging impossible
+%optflags_notraceback	-fomit-frame-pointer
+
+# aggressive floating-point optimization,
+# violate some ANSI or IEEE rules and/or specifications
+%optflags_fastmath	-ffast-math
+
+# enable strict aliasing rules, applicable for well written code
+%optflags_strict	-fstrict-aliasing
+
+# flags for compiling kernel
+%optflags_kernel	%nil
+
+# link time optimization
+%optflags_lto		-flto=auto
+
+%optflags_default	%optflags_core %optflags_warnings %optflags_debug %{!?_enable_debug:%{optflags_optimization}} %optflags_lto

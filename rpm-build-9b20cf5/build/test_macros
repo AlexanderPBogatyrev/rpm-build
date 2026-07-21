@@ -1,0 +1,36 @@
+#!/bin/bash
+# shellcheck disable=SC2120
+
+cd "$(dirname "$0")" || exit 1
+source ./test-functions.sh
+
+macros() {
+	local macros "$@"
+	printf '%s\n' "$macros" > "$macrosfile"
+	run \
+		binary=rpm \
+		args="--rcfile /usr/lib/rpm/rpmbuildrc:$t/testrc" \
+		"$@"
+}
+
+topic="macros"
+macros macros="%qwerty q w e r t y" re='\nq w e r t y\n' eval='%qwerty'
+# Outer {} are stripped.
+macros macros="%qwerty {q w e r t y}" re='\nq w e r t y\n' eval='%qwerty'
+# Multiline is not supported in {...} body, exactly because outer brackets are stripped.
+macros macros="%qwerty {q w e
+r t y}" re='unterminated body' eval='%qwerty'
+macros macros="%qwerty %{expand:q w e\\
+r t y}" re="\nq w e\nr t y\n" eval='%qwerty'
+macros macros="%qwerty %{shrink:q w e\\
+  r\\
+  t\\
+  y}" re="\nq w e r t y\n" eval='%qwerty'
+macros macros="%qwerty %{shrink:q w e
+  r %dnl comment
+  t %dnl comment
+  y}" re="\nq w e r t y\n" eval='%qwerty'
+macros macros="%qwerty q w e\\
+  r %dnl comment\\
+  t %dnl comment\\
+  y" re="\nq w e\n  r   t   y\n" eval='%qwerty'

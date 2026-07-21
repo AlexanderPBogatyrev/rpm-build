@@ -1,0 +1,85 @@
+#!/bin/bash
+# shellcheck disable=SC2120
+
+# Attest that %prep, %conf, %build, %install are executed in the correct order.
+
+cd "$(dirname "$0")" || exit 1
+source ./test-functions.sh
+
+check() {
+	local "$@"
+	cat <<-EOF >"$t/test.spec"
+		Name: test-specstep
+		Version: 0
+		Release: 0
+		Summary: Test %name
+		Group: Other
+		License: CC0
+		BuildArch: noarch
+		AutoReqProv: no
+		%description
+		Test p, f, c, i, b.
+		%prep
+		[ -z "$short_c" ] || : > Stages
+		echo >>Stages prep
+		%conf
+		[ -z "$short_c" ] || : > Stages
+		echo >>Stages conf
+		%build
+		[ -z "$short_c" ] || : > Stages
+		echo >>Stages build
+		%install
+		[ -z "$short_c" ] || : > Stages
+		echo >>Stages install
+		mkdir -p %buildroot/var/lib/specstep
+		cp -v -- Stages %buildroot/var/lib/specstep/all-\$(tr '[:space:]' '-' < Stages)
+		%check
+		# Not part of the 'all' file.
+		[ -z "$short_c" ] || : > Stages
+		echo >>Stages check
+		%files
+		/var/lib/specstep/all-*
+	EOF
+	run \
+		spec="$t/test.spec" \
+		callback="$cb" \
+		"$@"
+}
+
+topic="spec steps"
+cb_query() {
+	re_output="$t/query"
+	# For reasons unknown, rpm does not
+	# recognise '\0' in the queryformat.
+	rpmquery -p "$t/RPM/RPMS/noarch/test-specstep-0-0.noarch.rpm" \
+		--qf '[%{FILENAMES}\f]' | tr '\f' '\0' > "$re_output"
+}
+cb=cb_query
+check args="-bb" msg='trace all build steps (bb)' \
+	re="/var/lib/specstep/all-prep-conf-build-install"
+cb_traceparts() {
+	re_output="$t/traceparts"
+	grep -E < "$t/output" '^Executing\(%[^%)]+\)' \
+		| sed 's/):.*$/); /' | tr -d '\n' > "$re_output"
+}
+cb=cb_traceparts
+short_c=
+check args="-bk" msg='trace build steps (bk)' \
+	re="$(printf 'Executing\(%%%s\); ' prep conf build install check)"
+check args="-bi" msg='trace build steps (bi)' \
+	re="$(printf 'Executing\(%%%s\); ' prep conf build install check)"
+check args="-bc" msg='trace build steps (bc)' \
+	re="$(printf 'Executing\(%%%s\); ' prep conf build)" vre="$(printf 'Executing\(%%%s\); ' check install)"
+check args="-bf" msg='trace build steps (bf)' \
+	re="$(printf 'Executing\(%%%s\); ' prep conf)" vre="$(printf 'Executing\(%%%s\); ' check install build)"
+check args="-bp" msg='trace build steps (bp)' \
+	re="$(printf 'Executing\(%%%s\); ' prep)" vre="$(printf 'Executing\(%%%s\); ' check install build conf)"
+short_c=1
+check args="--short-circuit -bf" msg='trace build steps (short-circuit bf)' \
+	re="$(printf 'Executing\(%%%s\); ' conf)" vre="$(printf 'Executing\(%%%s\); ' check install build prep)"
+check args="--short-circuit -bc" msg='trace build steps (short-circuit bc)' \
+	re="$(printf 'Executing\(%%%s\); ' build)" vre="$(printf 'Executing\(%%%s\); ' check install conf prep)"
+check args="--short-circuit -bi" msg='trace build steps (short-circuit bi)' \
+	re="$(printf 'Executing\(%%%s\); ' install)" vre="$(printf 'Executing\(%%%s\); ' check build conf prep)"
+check args="--short-circuit -bk" msg='trace build steps (short-circuit bk)' \
+	re="$(printf 'Executing\(%%%s\); ' check)" vre="$(printf 'Executing\(%%%s\); ' install build conf prep)"

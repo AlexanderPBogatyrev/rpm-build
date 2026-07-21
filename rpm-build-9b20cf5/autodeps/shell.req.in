@@ -1,0 +1,201 @@
+#!/bin/sh -efu
+#
+# Copyright (C) 2000,2003  Dmitry V. Levin <ldv@altlinux.org>
+# Copyright (C) 2007       Alexey Tourbin <at@altlinux.org>
+# Copyright (C) 2016       Ivan Zakharyaschev <imz@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+#
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-find-package
+
+print_sh_number_from_shebang()
+{
+    sed -rn -e '1 s,^\#![[:space:]]*([^[:space:]]*/bin/env[[:space:]]+)?[^[:space:]]*sh([0-9]+)([[:space:]].*)?$,\2,p'
+}
+
+shREQ= shPROV=
+ShellReq()
+{
+	local f="$1"; shift
+
+	local t sh sh_num
+	t=$(file4 -bL "$f") || Fatal "${t:-$f: file type not available}"
+	sh_num="$(print_sh_number_from_shebang <"$f")"
+	case " $t" in
+		*"Bourne-Again shell script text"*)
+			sh=/bin/bash"$sh_num" ;;
+		*" bash script text"*)
+			sh=/bin/bash"$sh_num" ;;
+		*)
+			sh=/bin/sh"$sh_num" ;;
+	esac
+
+	local out line1
+	if ! out=$($sh --rpm-requires "$f"); then
+		# sh --rpm-requires failed, and stderr is already there.
+		# We are almost dead.  The last chance to escape is to see
+		# if the shell is used only to re-exec another interpreter, e.g.
+		#	exec tclsh "$0" "$@"
+		if line1=$(grep -E -m1 -v '^[[:space:]]*(#|$)' "$f"); then
+			set -- $line1
+			if [ $# -gt 1 ] && [ "$1" = exec ]; then
+				Info "$f is $2 script!"
+				# We do no more than shebang.req does.  If the script
+				# is not executable, shebang.req.files must have
+				# already issued "executable not executable" warning.
+				if [ -x "$f" ]; then
+					FindPackage "$f" "$2"
+				fi
+				return 0
+			fi
+		fi
+		Fatal "$f: $sh --rpm-requires failed"
+	fi
+
+	[ -n "$out" ] || return 0
+
+	# This function is a "closure": parent variables are available without
+	# explicit argument passing.  I checked that it works at least with some
+	# modern shells.  Why I ever need a separate function is because my $EDITOR
+	# is not as perfect as to provide decent syntax highlight for subshells.
+	CleanupRpmRequires()
+	{
+		printf '%s\n' "$out" |
+		while read -r line; do
+			# NB: grep and sed are expensive here.
+			case "$line" in
+				# Basic sanity check for --rpm-requires output.
+				# Better command/path validation is performed in FindPackage.
+				'executable('*[A-Za-z0-9]*')' | 'function('*[A-Za-z0-9]*')' ) ;;
+				*) Info "$f: invalid $sh --rpm-requires output: $line"; continue ;;
+			esac
+			# Allow e.g. executable(\ls) and executable("ls").
+			set -- $(IFS="($IFS\\'\")"; echo $line)
+			case $# in
+				2) ;;
+				*) Info "$f: invalid $sh --rpm-requires output: $line"; continue ;;
+			esac
+			case "$2" in
+				/*) printf '%s\t%s\n' "$1" "$2"; continue ;;
+			esac
+			case "$(PATH= type -t -- "$2")" in
+				alias|keyword|builtin) continue ;;
+				*) printf '%s\t%s\n' "$1" "$2" ;;
+			esac
+		done
+	}
+	out=$(CleanupRpmRequires)
+	[ -n "$out" ] || return 0
+
+	# Now that the output is sane I can fold dups.
+	out=$(printf '%s\n' "$out" |LC_COLLATE=C sort -u)
+
+	# Self-requires elimination: first pass.
+	# Consider e.g. /etc/rc.d/init.d/functions has both
+	# executable(failure) and function(failure).
+	# This means that failure() is used before being defined.
+	# This is okay since it is actually used in another function.
+	# We want to keep only the function(failure).
+	GetProv()
+	{
+		printf '%s\n' "$out" |
+		while read -r t r; do
+			[ "$t" = function ] || continue
+			printf '%s\n' "$r"
+		done
+	}
+	local prov
+	prov=$(GetProv)
+
+	GetReq()
+	{
+		printf '%s\n' "$out" |
+		while read -r t r; do
+			[ "$t" = executable ] || continue
+			if [ -n "$prov" ] && printf '%s\n' "$prov" |grep -F -qs -x -e "$r"; then
+				Verbose "$f: $r() is used before its definition"
+				continue
+			fi
+			printf '%s\n' "$r"
+		done
+	}
+	local req
+	req=$(GetReq)
+
+	AddReqProv()
+	{
+		[ -z "$1" ] || printf '%s\n' "$1"
+		[ -n "$2" ] || return 0
+		printf '%s\n' "$2" |
+		while read -r r; do
+			printf '%s\t%s\n' "$f" "$r"
+		done
+	}
+	shREQ=$(AddReqProv "$shREQ" "$req")
+	shPROV=$(AddReqProv "$shPROV" "$prov")
+}
+
+ShellReqEND()
+{
+	[ -n "$shREQ" ] || return 0
+	Debug "shREQ=$shREQ"
+	Debug "shPROV=$shPROV"
+
+	# Self-requires elimination: second pass.
+	# If ANY file has function(foo), skip all dependencies on execuatable(foo).
+	printf '%s\n' "$shREQ" |
+	while IFS=$'\t' read -r f r; do
+		CheckSelfReq()
+		{
+			[ -n "$shPROV" ] || return 0
+			printf '%s\n' "$shPROV" |
+			while IFS=$'\t' read -r f2 r2; do
+				if [ "$r" = "$r2" ]; then
+					printf '%s\n' "$f2"
+				fi
+			done
+		}
+		local self_req
+		self_req=$(CheckSelfReq)
+		if [ -n "$self_req" ]; then
+			Verbose "$f: $r() is defined in" $self_req
+			continue
+		fi
+
+		local dir
+		dir=${f#${RPM_BUILD_ROOT-}}
+		dir=${dir%/*}
+		CheckDirProv()
+		{
+			grep -F -qs -x -e "$r" "$1/.provides.sh" || return
+		}
+		if [ -n "${RPM_BUILD_ROOT-}" ] && CheckDirProv "$RPM_BUILD_ROOT$dir"; then
+			# I think that .provides.sh must provide this thingy.
+			# Otherwise we get an unmet depedency, which is good --
+			# one has to fix the .provides.sh early.
+			printf '%s(%s)\n' "$dir" "$r"
+		elif CheckDirProv "$dir"; then
+			printf '%s(%s)\n' "$dir" "$r"
+		else
+			FindPackage "$f" "$r"
+		fi
+	done
+}
+
+ArgvFileAction ShellReq "$@"
+ShellReqEND

@@ -1,0 +1,75 @@
+#!/bin/sh -e
+#
+# percolate annotations from "wet" nodes through a "dry" graph of links.
+# (A more formal description can be found below after the input
+# parameters are introduced.)
+#
+# The remainder is:
+# the links which have got no annotation (possibly, with cycles).
+#
+# The name is borrowed from morphology; cf, e.g., the illustration
+# (of the structure of the English verb "withstand")
+# at <http://www2.let.uu.nl/uil-ots/lexicon/zoek.pl?lemma=Feature+Percolation>:
+#
+#      V                              V
+#     / \                           [+abl]
+#    /   \			   /     \
+#   P     V   		 	  P	  V
+# with	stand	      =>	with	    stand
+# 	[+abl]		                    [+abl]
+#
+# Copyright (C) 2016  Ivan Zakharyaschev <imz@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+
+# Some nodes with annotations.
+# Two fields: node_id annotation
+readonly WET="$1" # the file will be appended to.
+
+# Some links (must be sorted on the 2nd field).
+# Two fields: node_id node_id
+readonly DRY_LINKS="$2" # the file will be re-written (with the "remainder").
+
+# JFS env var is used as the field separator.
+
+# What this script does (in other words).
+#
+# It appends (to WET) all the nodes that link to WET (transitively).
+# It leaves as the remainder of DRY_LINKS the subgraph which has no
+# links leading to WET.
+
+export LC_ALL=C
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/tmpdir.sh
+
+join_and_remainder()
+{
+    join ${JFS:+-t"$JFS"}      -1 2 -2 1 -o 1.1,2.2 "$1" "$2"
+    join ${JFS:+-t"$JFS"} -v 1 -1 2 -2 1 -o 1.1,1.2 "$1" "$2" >&3
+}
+
+new="$tmpdir"/new
+wet="$tmpdir"/wet
+rem="$tmpdir"/rem
+
+cat <"$WET" >"$new"
+
+while [ -s "$new" ]; do
+    sort ${JFS:+-t"$JFS"} -k1 <"$new" >"$wet"
+    join_and_remainder "$DRY_LINKS" "$wet" >"$new" 3>"$rem"
+
+    # append WET and update DRY_LINKS:
+    cat <"$new" >>"$WET"
+    cat <"$rem" >"$DRY_LINKS"
+done

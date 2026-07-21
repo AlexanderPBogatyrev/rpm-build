@@ -1,0 +1,69 @@
+#!/bin/sh -e
+#
+# Copyright (C) 2003  Dmitry V. Levin <ldv@altlinux.org>
+# Copyright (C) 2007  Alexey Tourbin <at@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+#
+
+if [ -z "${__included_autodep-}" ]; then
+__included_autodep=1
+
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+
+SetupMethods()
+{
+	local suffix="$1" inm="$2"; shift 2
+	local methodsdir
+	methodsdir="${RPMB_AUTODEPS_DIR:-$(dirname "$0")}"
+	# do not stat(2) here so as to bypass buildreq
+	local allm=$(ls "$methodsdir"/ |sed -n "/^[^.]/s/[.]$suffix$//p")
+	[ -n "$allm" ] || Fatal "no $suffix methods available"
+	allm=$(echo '' $allm '')
+	local m outm="$allm"
+	for m in $(IFS="$IFS,"; echo '' $inm); do
+		case "$m" in
+			*[!0-9A-Za-z_-]*)
+				Fatal "invalid $suffix method name $m"
+				;;
+			yes|auto|all)
+				outm=$allm
+				;;
+			no|none|off|false|skip)
+				outm=
+				;;
+			no*)
+				m=${m#no}
+				outm=$(echo "$outm" |sed "s/ $m / /g")
+				;;
+			*)
+				[ -z "${allm##* $m *}" ] || Fatal "$suffix method $m not available"
+				[ -n "$outm" -a -z "${outm##* $m *}" ] || outm=" $outm $m "
+				;;
+		esac
+	done
+	echo $outm |tr -s ' ' ','
+}
+
+RunMethods()
+{
+	local m_m m_dir m_suffix="$1" m_inm="$2"; shift 2
+	m_dir="${RPMB_AUTODEPS_DIR:-$(dirname "$0")}"
+	for m_m in $(IFS="$IFS,"; echo '' $m_inm); do
+		"$@" "$m_dir/$m_m.$m_suffix"
+	done
+}
+
+fi

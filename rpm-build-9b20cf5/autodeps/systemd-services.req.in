@@ -1,0 +1,17 @@
+#!/bin/sh -efu
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-find-package
+
+SystemdServiceReq()
+{
+	local bin
+
+	sed -n 's|^[[:space:]]*Exec[^=]*=[[:space:]]*[@:+!]*\([^[:space:]@:+!-][^[:space:]]*\).*|\1|p' "$1" |
+	while read bin; do
+		FindPackage "$1" "$bin"
+	done
+}
+
+ArgvFileAction SystemdServiceReq "$@"

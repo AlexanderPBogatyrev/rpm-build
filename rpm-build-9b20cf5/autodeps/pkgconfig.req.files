@@ -1,0 +1,13 @@
+#!/bin/sh -efu
+[ -n "${RPM_LIBDIR-}" ] || RPM_LIBDIR=`rpm --eval %_libdir`
+while IFS=$'\t' read -r f t; do
+	case "$f" in
+		${RPM_BUILD_ROOT-}/usr/share/pkgconfig/*.pc) ;;
+		${RPM_BUILD_ROOT-}$RPM_LIBDIR/pkgconfig/*.pc) ;;
+		*) continue ;;
+	esac
+	case "$t" in
+		*'symbolic link to '*) ;;
+		*) echo "$f" ;;
+	esac
+done

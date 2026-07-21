@@ -1,0 +1,5 @@
+#!/bin/sh -efu
+while IFS=$'\t' read -r f t; do
+	[ -z "${f##*.a}" ] && [ -z "${t#*current ar archive*}" ] &&
+		echo "$f" ||:
+done

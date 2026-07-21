@@ -1,0 +1,267 @@
+#!/bin/sh -efu
+#
+# Copyright (C) 2008, 2011, 2012  Alexey Tourbin <at@altlinux.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+
+. "${RPMB_AUTODEPS_DIR-@RPMCONFIGDIR@}"/autodep-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-functions
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/rpmb-find-package
+. "${RPMB_LIB_DIR-@RPMCONFIGDIR@}"/tmpdir.sh
+
+[ -n "${RPM_LIBDIR-}" ] || RPM_LIBDIR=`rpm --eval %_libdir`
+PKG_CONFIG_PATH=$RPM_LIBDIR/pkgconfig:/usr/share/pkgconfig
+[ -z "${RPM_BUILD_ROOT-}" ] ||
+PKG_CONFIG_PATH=$RPM_BUILD_ROOT$RPM_LIBDIR/pkgconfig:$RPM_BUILD_ROOT/usr/share/pkgconfig:$PKG_CONFIG_PATH
+export PKG_CONFIG_PATH
+
+InitPackagedFiles()
+{
+	PackagedFiles "${1:?}" >$tmpdir/PF
+	sed "s|^|${RPM_BUILD_ROOT-}|" <$tmpdir/PF >$tmpdir/BPF
+	grep -F -qs -x "$1" $tmpdir/BPF ||
+		Warning "packaged files misconfigured"
+	# Identify packaged files by inode.
+	xargs -r --delimiter='\n' <$tmpdir/BPF \
+		stat -c '%d,%i %n' |
+		sort -u >$tmpdir/iBPF
+}
+
+PkgconfigCflags()
+{
+	grep -E "^$RPM_LIBDIR/pkgconfig/[^/]+[.]pc\$" $tmpdir/PF >$tmpdir/pc || [ $? = 1 ]
+	if [ -n "${RPM_BUILD_ROOT-}" ]; then
+		# Process subpackage *.pc files before other *.pc files.
+		sed "s|^/|0 $RPM_BUILD_ROOT/|" <$tmpdir/pc >$tmpdir/PF-pc
+		(set +f && ls "$RPM_BUILD_ROOT$RPM_LIBDIR/pkgconfig"/*.pc 2>/dev/null) |
+		sed 's|^/|1 /|' >$tmpdir/BR-pc
+		sort -u -k2 $tmpdir/{PF,BR}-pc |sort -n |cut -d' ' -f2- >$tmpdir/pc
+		Debug "pc_files:" `cat $tmpdir/pc`
+	fi
+	if [ -s $tmpdir/pc ]; then
+		pkg-config --enable-recursion --cflags `cat $tmpdir/pc` ||
+			Fatal "pkg-config failed"
+	fi
+}
+
+initialized=
+pkgconfig_cflags=
+GlobalPkgInit()
+{
+	if [ -z "$initialized" ]; then
+		InitPackagedFiles "${1:?}"
+		pkgconfig_cflags=$(PkgconfigCflags)
+		Debug "pkgconfig_cflags:" $pkgconfig_cflags
+		initialized=1
+	fi
+}
+
+Cflags()
+{
+	local d="${1:?}"
+	d=${d#${RPM_BUILD_ROOT-}}
+	d=${d%/*}
+	set -- $pkgconfig_cflags -I/usr/include -I$d -I${d%/*} -I${d%/*/*}
+	local cf
+	for cf; do
+		case $cf in
+			-D?*) echo $cf ;;
+		esac
+	done
+	for cf; do
+		[ -n "${RPM_BUILD_ROOT-}" ] || continue
+		case $cf in
+			-I/*) echo -I$RPM_BUILD_ROOT${cf#-I} ;;
+		esac
+	done
+	for cf; do
+		case $cf in
+			-I/*) echo $cf ;;
+		esac
+	done
+}
+
+>$tmpdir/processed
+>$tmpdir/required
+
+gcc=
+cpp=
+cxx=
+llvm=
+cxx_test=
+CppReq()
+{
+	local f="$1"; shift
+	GlobalPkgInit "$f"
+
+	if grep -F -qs -x "$f" $tmpdir/processed; then
+		Verbose "$f: already processed"
+		return
+	fi
+
+	local srpm="${RPM_PACKAGE_NAME-}"
+	[ -n "$srpm" ] || srpm=$(rpmquery --qf='%{SOURCERPM}' -f "$f" 2>/dev/null) || srpm=foo
+	case "$srpm" in
+		gcc | gcc-[1-9]* | gcc[1-9]* )
+			[ -n "$gcc" ] ||
+			Verbose "$f: $PROG disabled for gcc"
+			gcc=$srpm
+			return 0 ;;
+		llvm | llvm[0-9]* )
+			[ -n "$llvm" ] ||
+			Verbose "$f: $PROG disabled for llvm"
+			llvm=$srpm
+			return 0 ;;
+	esac
+
+	if [ -z "$cpp" ]; then
+		cpp=/usr/bin/${RPM_ARCH:-noarch}-alt-linux-cpp
+		[ -x "$cpp" ] || cpp=/usr/bin/cpp
+		[ -z "${GCC_VERSION-}" ] || cpp=$cpp-$GCC_VERSION
+		Debug "cpp=$cpp"
+	fi
+
+	cflags=$(Cflags "$f")
+	Debug "$f: cflags:" $cflags
+
+	if ! "$cpp" -w -dI $cxx $cflags "$f" >$tmpdir/out; then
+		if [ -n "$cxx" -o "$cxx_test" = failed ]; then
+			Warning "$f: cpp failed"
+			return 0
+		fi
+		Info "$f: cpp failed, trying c++ mode"
+		cxx='-x c++'
+		if ! "$cpp" -w -dI $cxx $cflags "$f" >$tmpdir/out; then
+			if [ -z "$cxx_test" ]; then
+				"$cpp" -w -dI $cxx < /dev/null > /dev/null 2>&1 &&
+					cxx_test=ok ||
+					cxx_test=failed
+			fi
+			cxx=
+			Warning "$f: cpp failed"
+			return 0
+		fi
+	fi
+
+	# Keep only linemarks and includes, strip filename quotes.
+	sed -ni '/^# .* "\(\/\|<command-line>"\)/{s/"//g;p};/^#i.* ["<]/{s/[<">]//g;p}' $tmpdir/out
+
+	# Prepare the list of files in cpp output which are packaged in this subpackage.
+	awk '$1=="#" && $4==1 { print $3 }' <$tmpdir/out |
+		xargs -r --delimiter='\n' \
+		stat -c '%d,%i %n' |
+		sort -u >$tmpdir/iout
+	# As-is (possibly non-canonical) filenames, for use in awk:
+	join -o 1.2 $tmpdir/i{out,BPF} >$tmpdir/pf
+	Verbose "$f: requires $(wc -l <$tmpdir/pf) packaged files"
+	# Canonical filenames, add to the list of already processed files:
+	join -o 2.2 $tmpdir/i{out,BPF} |sort -u -o $tmpdir/processed{,} -
+
+	# Track included files down to the first external file.
+	awk -v prog="$PROG" -v hdr="$f" -v pf="$tmpdir"/pf <$tmpdir/out >$tmpdir/req '
+		# info cpp "Preprocessor Output"
+		BEGIN {
+			SP = 0
+			SPmark = 0
+			Stack[SP] = hdr
+			if (ENVIRON["RPM_SCRIPTS_DEBUG"] > 1)
+				DEBUG = 1
+			while ((getline <pf) > 0)
+				Packaged[$1] = 1
+		}
+		function Push(f) {
+			if (DEBUG)
+				printf "%c%*sPush %s\n",
+					Packaged[f] ? "+" : (SPmark == SP) ? "!" : " ",
+					SP * 2 + 1, "", f >"/dev/stderr"
+			# Print dependency.
+			if (SPmark == SP && !Packaged[f] && !Printed[f]++)
+				print f
+			# Update header->file mapping.
+			h = ExpectPush
+			if (!(h in h2f))
+				h2f[h] = f
+			# Further sync with the Include.
+			if (SPmark == SP) {
+				delete NeedPush[h]
+				h2f[h] = f
+			}
+			# Update the stack.
+			if (SPmark == SP && Packaged[f])
+				SPmark++
+			Stack[++SP] = f
+		}
+		function Pop(f) {
+			if (f != Stack[--SP] && f != "<command-line>")
+				printf "%s: %s: expected pop %s, got pop %s\n",
+					prog, hdr, Stack[SP], f >"/dev/stderr"
+			if (SPmark > SP)
+				SPmark = SP
+			if (DEBUG)
+				printf "%*sPop\n",
+					SP * 2 + 2, "" >"/dev/stderr"
+		}
+		function Include(h) {
+			if (DEBUG)
+				printf "%*sInclude %s\n",
+					SP * 2 + 2, "", h >"/dev/stderr"
+			if (SPmark == SP)
+				NeedPush[h] = 1
+			ExpectPush = h
+		}
+		$1=="#" && $4==1 { Push($3) }
+		$1=="#" && $4==2 { Pop($3) }
+		$1~/^#i/ { Include($2) }
+		END {
+			if (SP > 0)
+				printf "%s: %s: non-empty stack, top %s\n",
+					prog, hdr, Stack[SP] >"/dev/stderr"
+			# Recover missing pushes due to once-only optimization.
+			for (h in NeedPush) {
+				f = h2f[h]
+				if (f) {
+					if (!Packaged[f] && !Printed[f]++) {
+						if (DEBUG)
+							printf "recovered %s -> %s\n",
+								h, f >"/dev/stderr"
+						print f
+					}
+				}
+				else {
+					if (DEBUG)
+						printf "cannot recover %s\n",
+							h >"/dev/stderr"
+				}
+			}
+		}'
+	# The list of required files is now ready.
+	sort -u -o $tmpdir/req{,}
+
+	# Deal with files which have already been required.
+	comm -23 $tmpdir/{required,req} >$tmpdir/req.SH
+	comm -13 $tmpdir/{required,req} >$tmpdir/req.EX
+	Verbose "$f: requires $(wc -l <$tmpdir/req.SH) already required files"
+	Verbose "$f: requires $(wc -l <$tmpdir/req.EX) new files"
+	sort -u -o $tmpdir/required{,} $tmpdir/req.EX
+
+	while read -r h; do
+		RPM_FINDPACKAGE_HOST_PKG_NAMES=1
+		FindPackage "$f" "${h#${RPM_BUILD_ROOT-}}" </dev/null
+	done <$tmpdir/req.EX
+}
+
+SortFileHier()
+{
+	# Sort by shorter directory name, then by shorter file name.
+	awk 'match($0, /(.+)\/(.+)/, a) { print length(a[1]), length(a[2]), $0 }' |
+	sort -k1,1n -k2,2n -k3 |
+	cut -d' ' -f3-
+}
+
+# Process files in hierarchical order.
+ArgvFileAction echo "$@" >$tmpdir/argv.orig
+SortFileHier <$tmpdir/argv.orig >$tmpdir/argv.hier
+ArgvFileAction CppReq <$tmpdir/argv.hier

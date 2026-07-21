@@ -1,0 +1,4 @@
+#!/bin/sh
+
+set -- `rpm --eval %__install` "$@"
+RPM_INSTALL_STRIP=ignore PATH="/usr/libexec/rpm-build:$PATH" exec "$@"

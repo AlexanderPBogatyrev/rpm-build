@@ -1,0 +1,14 @@
+#!/bin/sh -efu
+
+[ -n "${RPM_SYSUSERSDIR-}" ] ||
+	exit 0
+[ -d "${RPM_BUILD_ROOT-}${RPM_SYSUSERSDIR-}" ] ||
+	exit 0
+
+while IFS=$'\t' read -r f t; do
+	case "$f" in
+		"${RPM_BUILD_ROOT-}${RPM_SYSUSERSDIR-}/"*.conf) ;;
+		*) continue ;;
+	esac
+	printf '%s\n' "$f"
+done

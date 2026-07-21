@@ -1,0 +1,51 @@
+#!/bin/bash
+# shellcheck disable=SC2120
+
+A=${RPM_ARCH-$(rpm --eval %_host_cpu)}
+
+cd "$(dirname "$0")" || exit 1
+source ./test-functions.sh
+
+check() {
+	local "$@"
+	cat <<-EOF >"$t/test.spec"
+		Name: test
+		Version: 0
+		Release: 0
+		Summary: Test
+		Group: Other
+		License: CC0
+		AutoReqProv: no
+		%description
+		%package standalone
+		Summary: Test
+		Group: Other
+		RemovePathPostfixes: .standalone
+		AutoReqProv: no
+		%description standalone
+		%build
+		echo 'int main() { return 1; }' | gcc -xc -O2 -g -o a -
+		echo 'int main() { return 2; }' | gcc -xc -O2 -g -o b -
+		%install
+		install -D a %buildroot%_bindir/a
+		install -D b %buildroot%_bindir/a.standalone
+		%files
+		%_bindir/a
+		%files standalone
+		%_bindir/a.standalone
+	EOF
+	run \
+		args="-bb --target=$A" \
+		spec="$t/test.spec" \
+		callback=cb_query \
+		"$@"
+}
+
+topic="removepostfixes"
+cb_query() {
+        re_output="$t/query"
+	( rpm -qp "$t/RPM/RPMS/$A/test-standalone-0-0.$A.rpm" --dump
+	  rpm -qp "$t/RPM/RPMS/$A/test-standalone-debuginfo-0-0.$A.rpm" --dump
+	) |& grep -v -F '.debug' > "$re_output"
+}
+check msg='no postfix' re=/bin/a vre=standalone
