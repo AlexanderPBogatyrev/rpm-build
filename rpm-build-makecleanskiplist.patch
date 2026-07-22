@@ -1,0 +1,332 @@
+diff --git a/rpm-build-9b20cf5/build.c b/rpm-build-9b20cf5/build.c
+index 68d405b..85700b9 100644
+--- a/rpm-build-9b20cf5/build.c
++++ b/rpm-build-9b20cf5/build.c
+@@ -60,7 +60,7 @@ static int checkSpec(Header h)
+ }
+ 
+ /*
+- * Kurwa, durni ameryka?ce sobe zawsze my?l?, ?e ca?y ?wiat mówi po
++ * Kurwa, durni ameryka?ce sobe zawsze my?l?, ?e ca?y ?wiat mï¿½wi po
+  * angielsku...
+  */
+ /* XXX this is still a dumb test but at least it's i18n aware */
+@@ -299,6 +299,10 @@ static int buildForTarget(const char * arg, BTA_t ba,
+     if (ba->buildAmount & RPMBUILD_PREPROCESS) /* we're done */
+ 	goto exit;
+ 
++    /* Preserve --makecleanskiplist across rebuild's buildAmount rewrite. */
++    if (ba->makeCleanSkipList)
++	buildAmount |= RPMBUILD_MAKECLEANSKIPLIST;
++
+     /* Assemble source header from parsed components */
+     initSourceHeader(spec);
+ 
+diff --git a/rpm-build-9b20cf5/build/Makefile.am b/rpm-build-9b20cf5/build/Makefile.am
+index 5461ee6..013673a 100644
+--- a/rpm-build-9b20cf5/build/Makefile.am
++++ b/rpm-build-9b20cf5/build/Makefile.am
+@@ -18,6 +18,7 @@ noinst_HEADERS = \
+ check_SCRIPTS = test_conditionals test_dnl test_shrink test_macros test_description \
+ 		test_caps test_removepostfixes \
+ 		test_specstep \
++		test_makecleanskiplist \
+ 		test_sysusers \
+ 		#
+ TESTS = $(check_SCRIPTS)
+diff --git a/rpm-build-9b20cf5/build/build.c b/rpm-build-9b20cf5/build/build.c
+index 2d4a198..88ea41a 100644
+--- a/rpm-build-9b20cf5/build/build.c
++++ b/rpm-build-9b20cf5/build/build.c
+@@ -326,6 +326,22 @@ int buildSpec(Spec spec, int what, int test)
+ 	    }
+ 	}
+     } else {
++	/* Optional packaged helper: prints its path and environment. */
++	if ((what & RPMBUILD_MAKECLEANSKIPLIST) && !test) {
++	    const char * savedSubdir = spec->buildSubdir;
++	    StringBuf sb = newStringBuf();
++
++	    appendStringBuf(sb, RPMCONFIGDIR "/makecleanskiplist\n");
++	    /* Avoid "cd <buildSubdir>" before %prep may create it. */
++	    spec->buildSubdir = NULL;
++	    rc = doScript(spec, RPMBUILD_STRINGBUF, "--makecleanskiplist",
++			sb, test);
++	    spec->buildSubdir = savedSubdir;
++	    sb = freeStringBuf(sb);
++	    if (rc)
++		goto exit;
++	}
++
+ 	if ((what & RPMBUILD_PREP) &&
+ 	    (rc = doScript(spec, RPMBUILD_PREP, NULL, NULL, test)))
+ 		goto exit;
+diff --git a/rpm-build-9b20cf5/build/poptBT.c b/rpm-build-9b20cf5/build/poptBT.c
+index 32cc8bc..4910599 100644
+--- a/rpm-build-9b20cf5/build/poptBT.c
++++ b/rpm-build-9b20cf5/build/poptBT.c
+@@ -26,6 +26,7 @@ struct rpmBuildArguments_s         rpmBTArgs;
+ #define	POPT_NODEPS		-1011
+ #define	POPT_SIGN		-1012
+ #define	POPT_FORCE		-1013
++#define	POPT_MAKECLEANSKIPLIST	-1014
+ 
+ #define	POPT_REBUILD		0x4220
+ #define	POPT_RECOMPILE		0x4320
+@@ -126,6 +127,10 @@ static void buildArgCallback( /*@unused@*/ poptContext con,
+     case POPT_RMSOURCE: rba->buildAmount |= RPMBUILD_RMSOURCE; break;
+     case POPT_RMSPEC: rba->buildAmount |= RPMBUILD_RMSPEC; break;
+     case POPT_RMBUILD: rba->buildAmount |= RPMBUILD_RMBUILD; break;
++    case POPT_MAKECLEANSKIPLIST:
++	rba->makeCleanSkipList = 1;
++	rba->buildAmount |= RPMBUILD_MAKECLEANSKIPLIST;
++	break;
+     case POPT_BUILDROOT:
+ 	if (rba->buildRootOverride) {
+ 	    rpmError(RPMERR_BUILDROOT, _("buildroot already specified, ignoring %s\n"), arg);
+@@ -233,6 +238,8 @@ struct poptOption rpmBuildPoptTable[] = {
+ 	N_("override build root"), "DIRECTORY" },
+  { "clean", '\0', 0, 0, POPT_RMBUILD,
+ 	N_("remove build tree when done"), NULL},
++ { "makecleanskiplist", '\0', 0, 0, POPT_MAKECLEANSKIPLIST,
++	N_("run packaged makecleanskiplist helper script during build"), NULL},
+  { "force", '\0', POPT_ARGFLAG_DOC_HIDDEN, &force, POPT_FORCE,
+         N_("ignore ExcludeArch: directives from spec file"), NULL},
+  { "fsmdebug", '\0', (POPT_ARG_VAL|POPT_ARGFLAG_DOC_HIDDEN), &_fsm_debug, -1,
+diff --git a/rpm-build-9b20cf5/build/rpmbuild.h b/rpm-build-9b20cf5/build/rpmbuild.h
+index 1bb9fd2..4e4484a 100644
+--- a/rpm-build-9b20cf5/build/rpmbuild.h
++++ b/rpm-build-9b20cf5/build/rpmbuild.h
+@@ -37,6 +37,7 @@ typedef enum rpmBuildFlags_e {
+     RPMBUILD_RMSPEC	= (1 << 11),	/*!< Remove spec file. */
+     RPMBUILD_PREPROCESS	= (1 << 12),	/*!< Preprocess spec file only. */
+     RPMBUILD_MACROREQS	= (1 << 13),	/*!< Dump used macro names only. */
++    RPMBUILD_MAKECLEANSKIPLIST = (1 << 14), /*!< Run %%makecleanskiplist helper. */
+     RPMBUILD_CONF	= (1 << 22),	/*!< Execute %%conf. */
+ } rpmBuildFlags;
+ /*@=typeuse@*/
+diff --git a/rpm-build-9b20cf5/build/test_makecleanskiplist b/rpm-build-9b20cf5/build/test_makecleanskiplist
+new file mode 100755
+index 0000000..b879c4f
+--- /dev/null
++++ b/rpm-build-9b20cf5/build/test_makecleanskiplist
+@@ -0,0 +1,133 @@
++#!/bin/bash
++# shellcheck disable=SC2120
++
++# Tests for --makecleanskiplist helper integration.
++
++cd "$(dirname "$0")" || exit 1
++source ./test-functions.sh
++
++HELPER_PATH=
++HELPER_BACKUP=
++HELPER_INSTALLED=
++
++helper_setup() {
++	local rpmb_bin helper src
++
++	rpmb_bin=$(echo "$RPMB" | awk '{print $NF}')
++	helper=$(strings "$rpmb_bin" 2>/dev/null | grep -E '/makecleanskiplist$' | head -1)
++	if [ -z "$helper" ]; then
++		printf 'Bail out! cannot resolve makecleanskiplist path from %s\n' "$rpmb_bin" >&2
++		exit 1
++	fi
++
++	src="../scripts/makecleanskiplist"
++	if [ ! -f "$src" ]; then
++		printf 'Bail out! helper script not found: %s\n' "$src" >&2
++		exit 1
++	fi
++
++	if [ -e "$helper" ]; then
++		HELPER_BACKUP="$t/makecleanskiplist.bak"
++		cp -a -- "$helper" "$HELPER_BACKUP"
++	fi
++
++	mkdir -p "$(dirname "$helper")"
++	install -m755 -- "$src" "$helper"
++	HELPER_PATH=$helper
++	HELPER_INSTALLED=1
++}
++
++helper_restore() {
++	if [ "$HELPER_INSTALLED" != 1 ] || [ -z "$HELPER_PATH" ]; then
++		return 0
++	fi
++	if [ -n "$HELPER_BACKUP" ]; then
++		install -m755 -- "$HELPER_BACKUP" "$HELPER_PATH"
++	else
++		rm -f -- "$HELPER_PATH"
++	fi
++}
++
++helper_setup
++trap 'helper_restore; atexit' EXIT
++
++write_spec() {
++	cat <<-EOF >"$t/test.spec"
++		Name: test-makecleanskiplist
++		Version: 0
++		Release: 0
++		Summary: Test %name
++		Group: Other
++		License: CC0
++		BuildArch: noarch
++		AutoReqProv: no
++		%description
++		Test helper invocation.
++		%prep
++		echo prep >> Stages
++		%build
++		echo build >> Stages
++		%files
++	EOF
++}
++
++cb_order_bp() {
++	re_output="$t/order"
++	grep -E '^Executing\(--makecleanskiplist\)|^Executing\(%prep\)|^Executing\(%build\)' \
++		< "$t/output" \
++		| sed 's/):.*$//' > "$re_output"
++}
++
++cb_no_helper() {
++	re_output="$t/output"
++}
++
++topic="makecleanskiplist"
++write_spec
++
++run \
++	spec="$t/test.spec" \
++	args="-bp --nodeps --makecleanskiplist" \
++	callback=cb_order_bp \
++	msg='helper runs before %prep on -bp' \
++	re=$'Executing\\(--makecleanskiplist\\)\nExecuting\\(%prep\\)' \
++	vre='Executing\\(%build\\)'
++
++run \
++	spec="$t/test.spec" \
++	args="-bp --nodeps --makecleanskiplist" \
++	msg='helper prints diagnostics to build log' \
++	re='=== makecleanskiplist ===\nscript path: .*\n=== environment ==='
++
++run \
++	spec="$t/test.spec" \
++	args="-bc --nodeps --makecleanskiplist" \
++	callback=cb_order_bp \
++	msg='helper runs before %prep on -bc' \
++	re=$'Executing\\(--makecleanskiplist\\)\nExecuting\\(%prep\\)'
++
++run \
++	spec="$t/test.spec" \
++	args="-bp --nodeps" \
++	callback=cb_no_helper \
++	msg='helper is not run without flag' \
++	vre='Executing\\(--makecleanskiplist\\)|=== makecleanskiplist ==='
++
++run \
++	spec="$t/test.spec" \
++	args="-bp --nodeps --nobuild --makecleanskiplist" \
++	callback=cb_no_helper \
++	msg='helper is not run with --nobuild' \
++	vre='Executing\\(--makecleanskiplist\\)|=== makecleanskiplist ==='
++
++if [ -n "$HELPER_PATH" ] && [ -e "$HELPER_PATH" ]; then
++	MISSING_HELPER="$t/missing-helper"
++	mv -- "$HELPER_PATH" "$MISSING_HELPER"
++	run \
++		spec="$t/test.spec" \
++		args="-bp --nodeps --makecleanskiplist" \
++		expect=1 \
++		msg='missing helper script fails build' \
++		re='Bad exit status|Exec of .* failed|Executing\\(--makecleanskiplist\\)'
++	install -m755 -- "$MISSING_HELPER" "$HELPER_PATH"
++fi
+diff --git a/rpm-build-9b20cf5/doc/rpmbuild.8 b/rpm-build-9b20cf5/doc/rpmbuild.8
+index f735731..de8b61d 100644
+--- a/rpm-build-9b20cf5/doc/rpmbuild.8
++++ b/rpm-build-9b20cf5/doc/rpmbuild.8
+@@ -23,7 +23,7 @@ rpmbuild \- Build RPM Package(s)
+ .SS "RPMBUILD OPTIONS:"
+ .PP
+ 
+- [\fB--buildroot \fIDIRECTORY\fB\fR] [\fB--clean\fR] [\fB--nobuild\fR]
++ [\fB--buildroot \fIDIRECTORY\fB\fR] [\fB--clean\fR] [\fB--makecleanskiplist\fR] [\fB--nobuild\fR]
+  [\fB--rmsource\fR] [\fB--rmspec\fR] [\fB--short-circuit\fR] [\fB--sign\fR]
+  [\fB--nosource\fR] [\fB--nopatch\fR]
+  [\fB--target \fIPLATFORM\fB\fR]
+@@ -155,6 +155,11 @@ When building a package, override the BuildRoot tag with directory
+ \fB--clean\fR
+ Remove the build tree after the packages are made.
+ .TP
++\fB--makecleanskiplist\fR
++Run the packaged \fI/usr/lib/rpm/makecleanskiplist\fR helper
++script early in the build; the script logs its absolute path and
++the full environment to the build log.
++.TP
+ \fB--nobuild\fR
+ Do not execute any build stages. Useful for testing out spec files.
+ .TP
+diff --git a/rpm-build-9b20cf5/lib/rpmcli.h b/rpm-build-9b20cf5/lib/rpmcli.h
+index 8af7cf7..8783b31 100644
+--- a/rpm-build-9b20cf5/lib/rpmcli.h
++++ b/rpm-build-9b20cf5/lib/rpmcli.h
+@@ -33,6 +33,7 @@ struct rpmBuildArguments_s {
+     int shortCircuit;		/*!< from --short-circuit */
+     int sign;			/*!< from --sign */
+     int useCatalog;		/*!< from --usecatalog */
++    int makeCleanSkipList;	/*!< from --makecleanskiplist */
+     char buildMode;		/*!< Build mode (one of "btBC") */
+     char buildChar;		/*!< Build stage (one of "abcilps ") */
+ /*@observer@*/ /*@null@*/
+diff --git a/rpm-build-9b20cf5/scripts/Makefile.am b/rpm-build-9b20cf5/scripts/Makefile.am
+index d29b05b..9354306 100644
+--- a/rpm-build-9b20cf5/scripts/Makefile.am
++++ b/rpm-build-9b20cf5/scripts/Makefile.am
+@@ -15,6 +15,7 @@ EXTRA_DIST = \
+ 	brp-verify-unit \
+ 	compress_files \
+ 	find-lang \
++	makecleanskiplist \
+ 	rpmb-find-package \
+ 	fixup-binconfig fixup-pkgconfig fixup-libtool fixup-libraries \
+ 	fixup-desktop fixup-desktop.awk \
+@@ -38,6 +39,7 @@ config_SCRIPTS = \
+ 	brp-alt \
+ 	compress_files \
+ 	find-lang \
++	makecleanskiplist \
+ 	rpmb-find-package \
+ 	fixup-binconfig fixup-pkgconfig fixup-libtool fixup-libraries \
+ 	fixup-gnuconfig fixup-desktop fixup-desktop.awk \
+diff --git a/rpm-build-9b20cf5/scripts/makecleanskiplist b/rpm-build-9b20cf5/scripts/makecleanskiplist
+new file mode 100755
+index 0000000..0d1fbc3
+--- /dev/null
++++ b/rpm-build-9b20cf5/scripts/makecleanskiplist
+@@ -0,0 +1,23 @@
++#!/bin/sh
++#
++# makecleanskiplist - proof-of-concept helper launched by rpmbuild
++# when --makecleanskiplist is given.
++#
++# Prints the absolute invocation path and the full process environment
++# into the build log (stdout/stderr of the build scriptlet).
++#
++
++script_path=$0
++if command -v readlink >/dev/null 2>&1; then
++	resolved=$(readlink -f -- "$0" 2>/dev/null) || resolved=
++	[ -n "$resolved" ] && script_path=$resolved
++elif command -v realpath >/dev/null 2>&1; then
++	resolved=$(realpath -- "$0" 2>/dev/null) || resolved=
++	[ -n "$resolved" ] && script_path=$resolved
++fi
++
++echo "=== makecleanskiplist ==="
++echo "script path: $script_path"
++echo "=== environment ==="
++env | LC_ALL=C sort
++echo "=== end makecleanskiplist ==="
